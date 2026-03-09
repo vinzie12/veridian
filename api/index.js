@@ -32,6 +32,30 @@ const authenticateToken = (req, res, next) => {
 };
 
 // ============================================
+// ROLE PERMISSION MATRIX
+// ============================================
+const PERMISSIONS = {
+  super_admin:    { canCreate: true,  canUpdate: true,  canDelete: true,  crossAgency: true  },
+  agency_admin:   { canCreate: true,  canUpdate: true,  canDelete: false, crossAgency: false },
+  commander:      { canCreate: true,  canUpdate: true,  canDelete: false, crossAgency: false },
+  dispatcher:     { canCreate: true,  canUpdate: true,  canDelete: false, crossAgency: false },
+  field_responder:{ canCreate: true,  canUpdate: false, canDelete: false, crossAgency: false },
+  viewer:         { canCreate: false, canUpdate: false, canDelete: false, crossAgency: false }
+};
+
+// Middleware to check permissions
+const checkPermission = (action) => (req, res, next) => {
+  const role = req.user.role;
+  const perms = PERMISSIONS[role];
+  if (!perms || !perms[action]) {
+    return res.status(403).json({ 
+      error: `Access denied. Your role (${role}) cannot perform this action.` 
+    });
+  }
+  next();
+};
+
+// ============================================
 // PUBLIC ROUTES — no login required
 // ============================================
 app.get('/', async (req, res) => {
@@ -111,7 +135,7 @@ const PORT = 3000;
 // ============================================
 
 // Create a new incident
-app.post('/incidents', authenticateToken, async (req, res) => {
+app.post('/incidents', authenticateToken, checkPermission('canCreate'), async (req, res) => {
   const { incident_type, severity, latitude, longitude, address, description, extra_fields } = req.body;
 
   if (!incident_type || !severity) {
@@ -164,7 +188,7 @@ app.get('/incidents/:id', authenticateToken, async (req, res) => {
 });
 
 // Update incident status
-app.patch('/incidents/:id', authenticateToken, async (req, res) => {
+app.patch('/incidents/:id', authenticateToken, checkPermission('canUpdate'), async (req, res) => {
   const { status, description, extra_fields } = req.body;
 
   const { data, error } = await supabase
@@ -177,6 +201,21 @@ app.patch('/incidents/:id', authenticateToken, async (req, res) => {
 
   if (error) return res.status(500).json({ error: error.message });
   res.json({ message: 'Incident updated!', incident: data });
+});
+
+// Delete incident
+app.delete('/incidents/:id', authenticateToken, checkPermission('canDelete'), async (req, res) => {
+  const { data, error } = await supabase
+    .from('incidents')
+    .delete()
+    .eq('id', req.params.id)
+    .eq('agency_id', req.user.agency_id)
+    .select()
+    .single();
+
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: 'Incident not found' });
+  res.json({ message: 'Incident deleted!', incident: data });
 });
 
 app.listen(PORT, () => {
