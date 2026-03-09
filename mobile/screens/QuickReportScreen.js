@@ -9,6 +9,15 @@ export default function QuickReportScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0a0a0a', justifyContent: 'center', alignItems: 'center' },
-  text: { color: '#00ff88', fontSize: 24, fontWeight: 'bold' }
+  container: {
+    flex: 1,
+    backgroundColor: '#0a0a0a',
+    justifyContent: 'center',
+    alignItems: 'center'
+  },
+  text: {
+    color: '#00ff88',
+    fontSize: 24,
+    fontWeight: 'bold'
+  }
 });
