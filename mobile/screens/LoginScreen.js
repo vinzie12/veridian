@@ -1,32 +1,35 @@
 import { useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity,
-  StyleSheet, ActivityIndicator, Alert, SafeAreaView
+  StyleSheet, ActivityIndicator, Alert
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import axios from 'axios';
 
 const API_URL = 'http://192.168.254.100:3000';
 
 export default function LoginScreen({ navigation }) {
   const [badgeNumber, setBadgeNumber] = useState('');
+  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
   const handleLogin = async () => {
-    if (!badgeNumber) {
-      Alert.alert('Error', 'Please enter your badge number');
+    if (!badgeNumber || !password) {
+      Alert.alert('Error', 'Please enter your badge number and password');
       return;
     }
     setLoading(true);
     try {
       const response = await axios.post(`${API_URL}/auth/login`, {
-        badge_number: badgeNumber
+        badge_number: badgeNumber,
+        password: password
       });
       navigation.replace('Home', { 
         token: response.data.token,
         user: response.data.user 
       });
     } catch (error) {
-      Alert.alert('Login Failed', 'Invalid badge number. Try BADGE001');
+      Alert.alert('Login Failed', 'Invalid badge number or password');
     } finally {
       setLoading(false);
     }
@@ -50,6 +53,16 @@ export default function LoginScreen({ navigation }) {
           autoCapitalize="characters"
         />
 
+        <Text style={styles.label}>PASSWORD</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="Enter your password"
+          placeholderTextColor="#666"
+          value={password}
+          onChangeText={setPassword}
+          secureTextEntry={true}
+        />
+
         <TouchableOpacity
           style={styles.button}
           onPress={handleLogin}
@@ -59,6 +72,13 @@ export default function LoginScreen({ navigation }) {
             ? <ActivityIndicator color="#fff" />
             : <Text style={styles.buttonText}>LOGIN</Text>
           }
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.signupButton}
+          onPress={() => navigation.navigate('Signup')}
+        >
+          <Text style={styles.signupText}>Don't have an account? SIGN UP</Text>
         </TouchableOpacity>
       </View>
     </SafeAreaView>
@@ -118,5 +138,15 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
     letterSpacing: 2
+  },
+  signupButton: {
+    alignItems: 'center',
+    marginTop: 16
+  },
+  signupText: {
+    color: '#00ff88',
+    fontSize: 14,
+    fontWeight: 'bold',
+    letterSpacing: 1
   }
 });
