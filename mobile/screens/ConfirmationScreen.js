@@ -1,6 +1,6 @@
 import {
   View, Text, StyleSheet,
-  TouchableOpacity, SafeAreaView
+  TouchableOpacity, SafeAreaView, Alert
 } from 'react-native';
 
 const SEVERITY_COLORS = {
@@ -10,14 +10,8 @@ const SEVERITY_COLORS = {
   low: '#00CC44'
 };
 
-const INCIDENT_ICONS = {
-  fire: '🔥',
-  medical: '🚑',
-  police: '🚔'
-};
-
 export default function ConfirmationScreen({ route, navigation }) {
-  const { token, user, incident } = route.params;
+  const { token, user, incident, isAnonymous } = route.params;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -29,7 +23,20 @@ export default function ConfirmationScreen({ route, navigation }) {
         </View>
 
         <Text style={styles.successTitle}>INCIDENT REPORTED</Text>
-        <Text style={styles.successSubtitle}>All units have been notified</Text>
+        <Text style={styles.successSubtitle}>
+          {isAnonymous 
+            ? 'Your report has been submitted anonymously' 
+            : 'All units have been notified'}
+        </Text>
+
+        {/* Tracking ID for anonymous users */}
+        {isAnonymous && incident.trackingId && (
+          <View style={styles.trackingCard}>
+            <Text style={styles.trackingLabel}>TRACKING ID</Text>
+            <Text style={styles.trackingId}>{incident.trackingId}</Text>
+            <Text style={styles.trackingNote}>Save this ID to check your report status</Text>
+          </View>
+        )}
 
         {/* Incident Card */}
         <View style={styles.card}>
@@ -51,12 +58,12 @@ export default function ConfirmationScreen({ route, navigation }) {
 
           <View style={styles.detailRow}>
             <Text style={styles.detailIcon}>
-              {INCIDENT_ICONS[incident.type]}
+              {incident.typeIcon || '⚠️'}
             </Text>
             <View>
               <Text style={styles.detailLabel}>INCIDENT TYPE</Text>
               <Text style={styles.detailValue}>
-                {incident.type.toUpperCase()}
+                {incident.typeName?.toUpperCase() || 'UNKNOWN'}
               </Text>
             </View>
           </View>
@@ -79,19 +86,42 @@ export default function ConfirmationScreen({ route, navigation }) {
         </View>
 
         {/* Buttons */}
-        <TouchableOpacity
-          style={styles.addDetailsBtn}
-          onPress={() => navigation.replace('Home', { token, user })}
-        >
-          <Text style={styles.addDetailsText}>ADD MORE DETAILS</Text>
-        </TouchableOpacity>
+        {isAnonymous ? (
+          <>
+            <TouchableOpacity
+              style={styles.trackBtn}
+              onPress={() => {
+                // TODO: Navigate to tracking screen
+                Alert.alert('Track Report', 'Report tracking coming soon!');
+              }}
+            >
+              <Text style={styles.trackBtnText}>TRACK MY REPORT</Text>
+            </TouchableOpacity>
 
-        <TouchableOpacity
-          style={styles.homeBtn}
-          onPress={() => navigation.replace('Home', { token, user })}
-        >
-          <Text style={styles.homeBtnText}>BACK TO HOME</Text>
-        </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.homeBtn}
+              onPress={() => navigation.replace('Login')}
+            >
+              <Text style={styles.homeBtnText}>BACK TO LOGIN</Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <>
+            <TouchableOpacity
+              style={styles.addDetailsBtn}
+              onPress={() => navigation.replace('Home', { token, user })}
+            >
+              <Text style={styles.addDetailsText}>ADD MORE DETAILS</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.homeBtn}
+              onPress={() => navigation.replace('Home', { token, user })}
+            >
+              <Text style={styles.homeBtnText}>BACK TO HOME</Text>
+            </TouchableOpacity>
+          </>
+        )}
 
       </View>
     </SafeAreaView>
@@ -166,5 +196,47 @@ const styles = StyleSheet.create({
   homeBtnText: {
     color: '#666', fontSize: 14,
     fontWeight: 'bold', letterSpacing: 2
-  }
+  },
+  trackingCard: {
+    backgroundColor: 'rgba(0, 255, 136, 0.1)',
+    borderRadius: 12,
+    padding: 16,
+    alignItems: 'center',
+    marginBottom: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 255, 136, 0.3)',
+  },
+  trackingLabel: {
+    color: '#00ff88',
+    fontSize: 10,
+    fontWeight: 'bold',
+    letterSpacing: 2,
+    marginBottom: 4,
+  },
+  trackingId: {
+    color: '#fff',
+    fontSize: 24,
+    fontWeight: 'bold',
+    letterSpacing: 4,
+    marginBottom: 4,
+  },
+  trackingNote: {
+    color: '#666',
+    fontSize: 11,
+    textAlign: 'center',
+  },
+  trackBtn: {
+    backgroundColor: '#00ff88',
+    borderRadius: 12,
+    padding: 18,
+    width: '100%',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  trackBtnText: {
+    color: '#0a0a0a',
+    fontSize: 14,
+    fontWeight: 'bold',
+    letterSpacing: 2,
+  },
 });

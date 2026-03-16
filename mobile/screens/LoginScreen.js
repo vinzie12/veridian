@@ -1,38 +1,92 @@
 import { useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity,
-  StyleSheet, ActivityIndicator, Alert
+  ActivityIndicator, Alert, Keyboard
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import axios from 'axios';
-
-const API_URL = 'http://192.168.254.100:3000';
+import { API_URL } from '../lib/supabase';
+import { styles } from './styles/LoginScreenStyles';
 
 export default function LoginScreen({ navigation }) {
-  const [badgeNumber, setBadgeNumber] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [otpToken, setOtpToken] = useState('');
   const [loading, setLoading] = useState(false);
+  const [loginMode, setLoginMode] = useState('password'); // 'password' or 'otp'
+  const [otpSent, setOtpSent] = useState(false);
+  const [showLoginForm, setShowLoginForm] = useState(false);
 
   const handleLogin = async () => {
-    if (!badgeNumber || !password) {
-      Alert.alert('Error', 'Please enter your badge number and password');
+    if (!email || !password) {
+      Alert.alert('Error', 'Please enter your email and password');
       return;
     }
     setLoading(true);
     try {
       const response = await axios.post(`${API_URL}/auth/login`, {
-        badge_number: badgeNumber,
+        email: email,
         password: password
       });
+      Keyboard.dismiss();
       navigation.replace('Home', { 
-        token: response.data.token,
+        token: response.data.access_token,
         user: response.data.user 
       });
     } catch (error) {
-      Alert.alert('Login Failed', 'Invalid badge number or password');
+      const message = error.response?.data?.error || 'Invalid email or password';
+      Alert.alert('Login Failed', message);
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSendOtp = async () => {
+    if (!email) {
+      Alert.alert('Error', 'Please enter your email');
+      return;
+    }
+    setLoading(true);
+    try {
+      await axios.post(`${API_URL}/auth/login/otp`, { email });
+      setOtpSent(true);
+      Alert.alert('OTP Sent', 'Check your email for a login link');
+    } catch (error) {
+      const message = error.response?.data?.error || 'Failed to send OTP';
+      Alert.alert('Error', message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerifyOtp = async () => {
+    if (!email || !otpToken) {
+      Alert.alert('Error', 'Please enter your email and OTP token');
+      return;
+    }
+    setLoading(true);
+    try {
+      const response = await axios.post(`${API_URL}/auth/login/verify-otp`, {
+        email: email,
+        token: otpToken,
+        type: 'magiclink'
+      });
+      Keyboard.dismiss();
+      navigation.replace('Home', { 
+        token: response.data.access_token,
+        user: response.data.user 
+      });
+    } catch (error) {
+      const message = error.response?.data?.error || 'Invalid OTP token';
+      Alert.alert('Verification Failed', message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const resetOtp = () => {
+    setOtpSent(false);
+    setOtpToken('');
   };
 
   return (
@@ -43,110 +97,148 @@ export default function LoginScreen({ navigation }) {
       </View>
 
       <View style={styles.form}>
-        <Text style={styles.label}>BADGE NUMBER</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="Enter your badge number"
-          placeholderTextColor="#666"
-          value={badgeNumber}
-          onChangeText={setBadgeNumber}
-          autoCapitalize="characters"
-        />
-
-        <Text style={styles.label}>PASSWORD</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="Enter your password"
-          placeholderTextColor="#666"
-          value={password}
-          onChangeText={setPassword}
-          secureTextEntry={true}
-        />
-
+        {/* Quick Report - Primary Action */}
         <TouchableOpacity
-          style={styles.button}
-          onPress={handleLogin}
-          disabled={loading}
+          style={styles.quickReportButton}
+          onPress={() => navigation.navigate('QuickReport', { token: null, user: null })}
         >
-          {loading
-            ? <ActivityIndicator color="#fff" />
-            : <Text style={styles.buttonText}>LOGIN</Text>
-          }
+          <Text style={styles.quickReportText}>⚠️ QUICK REPORT</Text>
+          <Text style={styles.quickReportSubtext}>Report an emergency immediately</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity
-          style={styles.signupButton}
-          onPress={() => navigation.navigate('Signup')}
-        >
-          <Text style={styles.signupText}>Don't have an account? SIGN UP</Text>
-        </TouchableOpacity>
+        {/* Divider */}
+        <View style={styles.divider}>
+          <View style={styles.dividerLine} />
+          <Text style={styles.dividerText}>OR</Text>
+          <View style={styles.dividerLine} />
+        </View>
+
+        {/* Login Toggle Button */}
+        {!showLoginForm && (
+          <TouchableOpacity
+            style={styles.loginToggleButton}
+            onPress={() => setShowLoginForm(true)}
+          >
+            <Text style={styles.loginToggleText}>LOGIN TO YOUR ACCOUNT</Text>
+          </TouchableOpacity>
+        )}
+
+        {/* Login Form - Only shown when toggled */}
+        {showLoginForm && (
+          <>
+            <TouchableOpacity
+              style={styles.backButton}
+              onPress={() => {
+                setShowLoginForm(false);
+                resetOtp();
+              }}
+            >
+              <Text style={styles.backText}>← Back</Text>
+            </TouchableOpacity>
+
+            <Text style={styles.label}>EMAIL</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="Enter your email"
+              placeholderTextColor="#666"
+              value={email}
+              onChangeText={setEmail}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+
+            {loginMode === 'password' && (
+              <>
+                <Text style={styles.label}>PASSWORD</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Enter your password"
+                  placeholderTextColor="#666"
+                  value={password}
+                  onChangeText={setPassword}
+                  secureTextEntry={true}
+                />
+
+                <TouchableOpacity
+                  style={styles.button}
+                  onPress={handleLogin}
+                  disabled={loading}
+                >
+                  {loading
+                    ? <ActivityIndicator color="#0a0a0a" />
+                    : <Text style={styles.buttonText}>LOGIN</Text>
+                  }
+                </TouchableOpacity>
+              </>
+            )}
+
+            {loginMode === 'otp' && !otpSent && (
+              <TouchableOpacity
+                style={styles.button}
+                onPress={handleSendOtp}
+                disabled={loading}
+              >
+                {loading
+                  ? <ActivityIndicator color="#0a0a0a" />
+                  : <Text style={styles.buttonText}>SEND MAGIC LINK</Text>
+                }
+              </TouchableOpacity>
+            )}
+
+            {loginMode === 'otp' && otpSent && (
+              <>
+                <Text style={styles.label}>OTP TOKEN</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Enter token from email"
+                  placeholderTextColor="#666"
+                  value={otpToken}
+                  onChangeText={setOtpToken}
+                  autoCapitalize="none"
+                />
+
+                <TouchableOpacity
+                  style={styles.button}
+                  onPress={handleVerifyOtp}
+                  disabled={loading}
+                >
+                  {loading
+                    ? <ActivityIndicator color="#0a0a0a" />
+                    : <Text style={styles.buttonText}>VERIFY</Text>
+                  }
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.linkButton}
+                  onPress={resetOtp}
+                >
+                  <Text style={styles.linkText}>Resend OTP</Text>
+                </TouchableOpacity>
+              </>
+            )}
+
+            <TouchableOpacity
+              style={styles.modeToggle}
+              onPress={() => {
+                setLoginMode(loginMode === 'password' ? 'otp' : 'password');
+                resetOtp();
+              }}
+            >
+              <Text style={styles.modeToggleText}>
+                {loginMode === 'password' ? 'Login with Magic Link (OTP)' : 'Login with Password'}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.signupButton}
+              onPress={() => navigation.navigate('Signup')}
+            >
+              <Text style={styles.signupText}>Don't have an account? SIGN UP</Text>
+            </TouchableOpacity>
+          </>
+        )}
       </View>
     </SafeAreaView>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0a0a0a',
-    justifyContent: 'center',
-    padding: 24
-  },
-  header: {
-    alignItems: 'center',
-    marginBottom: 48
-  },
-  logo: {
-    fontSize: 42,
-    fontWeight: 'bold',
-    color: '#00ff88',
-    letterSpacing: 8
-  },
-  tagline: {
-    fontSize: 14,
-    color: '#666',
-    marginTop: 8,
-    letterSpacing: 2
-  },
-  form: {
-    gap: 16
-  },
-  label: {
-    color: '#00ff88',
-    fontSize: 12,
-    fontWeight: 'bold',
-    letterSpacing: 2
-  },
-  input: {
-    backgroundColor: '#1a1a1a',
-    color: '#fff',
-    padding: 16,
-    borderRadius: 8,
-    fontSize: 18,
-    borderWidth: 1,
-    borderColor: '#333'
-  },
-  button: {
-    backgroundColor: '#00ff88',
-    padding: 18,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginTop: 8
-  },
-  buttonText: {
-    color: '#0a0a0a',
-    fontSize: 16,
-    fontWeight: 'bold',
-    letterSpacing: 2
-  },
-  signupButton: {
-    alignItems: 'center',
-    marginTop: 16
-  },
-  signupText: {
-    color: '#00ff88',
-    fontSize: 14,
-    fontWeight: 'bold',
-    letterSpacing: 1
-  }
-});

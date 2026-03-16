@@ -6,7 +6,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import axios from 'axios';
 
-const API_URL = 'http://192.168.254.100:3000';
+import { API_URL } from '../lib/supabase';
 
 const SEVERITY_COLORS = {
   critical: '#FF0000',

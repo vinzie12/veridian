@@ -5,8 +5,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import axios from 'axios';
-
-const API_URL = 'http://192.168.254.100:3000';
+import { API_URL } from '../lib/supabase';
 
 export default function SignupScreen({ navigation }) {
   const [badgeNumber, setBadgeNumber] = useState('');
@@ -17,6 +16,7 @@ export default function SignupScreen({ navigation }) {
   const [selectedAgency, setSelectedAgency] = useState(null);
   const [agencies, setAgencies] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [accountType, setAccountType] = useState('responder'); // 'responder' or 'citizen'
 
   useEffect(() => {
     fetchAgencies();
@@ -24,7 +24,7 @@ export default function SignupScreen({ navigation }) {
 
   const fetchAgencies = async () => {
     try {
-      const response = await axios.get(`${API_URL}/`);
+      const response = await axios.get(`${API_URL}/agencies`);
       setAgencies(response.data.agencies);
     } catch (error) {
       console.error('Failed to fetch agencies:', error);
@@ -32,8 +32,14 @@ export default function SignupScreen({ navigation }) {
   };
 
   const handleSignup = async () => {
-    if (!badgeNumber || !password || !fullName || !email || !selectedAgency) {
-      Alert.alert('Error', 'Please fill in all fields');
+    if (!email || !password || !fullName) {
+      Alert.alert('Error', 'Please fill in all required fields');
+      return;
+    }
+
+    // Agency required for responders, optional for citizens
+    if (accountType === 'responder' && !selectedAgency) {
+      Alert.alert('Error', 'Please select an agency for responder accounts');
       return;
     }
 
@@ -50,18 +56,16 @@ export default function SignupScreen({ navigation }) {
     setLoading(true);
     try {
       const response = await axios.post(`${API_URL}/auth/signup`, {
-        badge_number: badgeNumber,
+        email: email,
         password: password,
         full_name: fullName,
-        email: email,
-        agency_id: selectedAgency
+        badge_number: badgeNumber || null,
+        agency_id: selectedAgency || null,
+        role: accountType === 'citizen' ? 'citizen' : 'field_responder'
       });
       
-      Alert.alert('Success', 'Account created successfully!', [
-        { text: 'OK', onPress: () => navigation.replace('Home', { 
-          token: response.data.token,
-          user: response.data.user 
-        })}
+      Alert.alert('Success', 'Account created successfully! You can now log in.', [
+        { text: 'OK', onPress: () => navigation.replace('Login') }
       ]);
     } catch (error) {
       const message = error.response?.data?.error || 'Failed to create account';
@@ -82,26 +86,49 @@ export default function SignupScreen({ navigation }) {
         </View>
 
         <View style={styles.form}>
-          <Text style={styles.label}>BADGE NUMBER</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Enter badge number"
-            placeholderTextColor="#666"
-            value={badgeNumber}
-            onChangeText={setBadgeNumber}
-            autoCapitalize="characters"
-          />
+          {/* Account Type Selection */}
+          <Text style={styles.label}>ACCOUNT TYPE *</Text>
+          <View style={styles.accountTypeContainer}>
+            <TouchableOpacity
+              style={[
+                styles.accountTypeButton,
+                accountType === 'responder' && styles.accountTypeButtonSelected
+              ]}
+              onPress={() => {
+                setAccountType('responder');
+                setSelectedAgency(null);
+              }}
+            >
+              <Text style={[
+                styles.accountTypeText,
+                accountType === 'responder' && styles.accountTypeTextSelected
+              ]}>
+                🚒 RESPONDER
+              </Text>
+              <Text style={styles.accountTypeDesc}>Agency personnel</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={[
+                styles.accountTypeButton,
+                accountType === 'citizen' && styles.accountTypeButtonSelected
+              ]}
+              onPress={() => {
+                setAccountType('citizen');
+                setSelectedAgency(null);
+              }}
+            >
+              <Text style={[
+                styles.accountTypeText,
+                accountType === 'citizen' && styles.accountTypeTextSelected
+              ]}>
+                👤 CITIZEN
+              </Text>
+              <Text style={styles.accountTypeDesc}>Public user</Text>
+            </TouchableOpacity>
+          </View>
 
-          <Text style={styles.label}>FULL NAME</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Enter your full name"
-            placeholderTextColor="#666"
-            value={fullName}
-            onChangeText={setFullName}
-          />
-
-          <Text style={styles.label}>EMAIL</Text>
+          <Text style={styles.label}>EMAIL *</Text>
           <TextInput
             style={styles.input}
             placeholder="Enter your email"
@@ -110,30 +137,60 @@ export default function SignupScreen({ navigation }) {
             onChangeText={setEmail}
             keyboardType="email-address"
             autoCapitalize="none"
+            autoCorrect={false}
           />
 
-          <Text style={styles.label}>AGENCY</Text>
-          <View style={styles.agencyContainer}>
-            {agencies.map(agency => (
-              <TouchableOpacity
-                key={agency.id}
-                style={[
-                  styles.agencyButton,
-                  selectedAgency === agency.id && styles.agencyButtonSelected
-                ]}
-                onPress={() => setSelectedAgency(agency.id)}
-              >
-                <Text style={[
-                  styles.agencyText,
-                  selectedAgency === agency.id && styles.agencyTextSelected
-                ]}>
-                  {agency.name}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
+          <Text style={styles.label}>FULL NAME *</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Enter your full name"
+            placeholderTextColor="#666"
+            value={fullName}
+            onChangeText={setFullName}
+          />
 
-          <Text style={styles.label}>PASSWORD</Text>
+          {/* Badge number only for responders */}
+          {accountType === 'responder' && (
+            <>
+              <Text style={styles.label}>BADGE NUMBER (OPTIONAL)</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Enter badge number"
+                placeholderTextColor="#666"
+                value={badgeNumber}
+                onChangeText={setBadgeNumber}
+                autoCapitalize="characters"
+              />
+            </>
+          )}
+
+          {/* Agency selection only for responders */}
+          {accountType === 'responder' && (
+            <>
+              <Text style={styles.label}>AGENCY *</Text>
+              <View style={styles.agencyContainer}>
+                {agencies.map(agency => (
+                  <TouchableOpacity
+                    key={agency.id}
+                    style={[
+                      styles.agencyButton,
+                      selectedAgency === agency.id && styles.agencyButtonSelected
+                    ]}
+                    onPress={() => setSelectedAgency(agency.id)}
+                  >
+                    <Text style={[
+                      styles.agencyText,
+                      selectedAgency === agency.id && styles.agencyTextSelected
+                    ]}>
+                      {agency.name}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </>
+          )}
+
+          <Text style={styles.label}>PASSWORD *</Text>
           <TextInput
             style={styles.input}
             placeholder="Enter password (min 6 characters)"
@@ -201,6 +258,37 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: 'bold',
     letterSpacing: 2
+  },
+  accountTypeContainer: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 8
+  },
+  accountTypeButton: {
+    flex: 1,
+    backgroundColor: '#1a1a1a',
+    padding: 16,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#333',
+    alignItems: 'center'
+  },
+  accountTypeButtonSelected: {
+    backgroundColor: '#00ff88',
+    borderColor: '#00ff88'
+  },
+  accountTypeText: {
+    color: '#888',
+    fontSize: 14,
+    fontWeight: 'bold'
+  },
+  accountTypeTextSelected: {
+    color: '#0a0a0a'
+  },
+  accountTypeDesc: {
+    color: '#666',
+    fontSize: 11,
+    marginTop: 4
   },
   input: {
     backgroundColor: '#1a1a1a',
