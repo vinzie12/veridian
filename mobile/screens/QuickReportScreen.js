@@ -30,6 +30,7 @@ export default function QuickReportScreen({ route, navigation }) {
   const [locationReady, setLocationReady] = useState(false);
   const [loadingTypes, setLoadingTypes] = useState(true);
   const [showAllTypes, setShowAllTypes] = useState(false);
+  const [hasLocationPermission, setHasLocationPermission] = useState(false);
   
   // Map and location state
   const [userLocation, setUserLocation] = useState(null);
@@ -70,6 +71,7 @@ export default function QuickReportScreen({ route, navigation }) {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status === 'granted') {
+          setHasLocationPermission(true);
           const location = await Location.getCurrentPositionAsync({
             accuracy: Location.Accuracy.High,
           });
@@ -86,13 +88,38 @@ export default function QuickReportScreen({ route, navigation }) {
             const addr = `${g.street || ''} ${g.city || ''} ${g.region || ''}`.trim();
             setIncidentAddress(addr);
           }
-          setLocationReady(true);
+        } else {
+          // Permission denied - use fallback location
+          console.log('Location permission denied, using fallback');
+          setHasLocationPermission(false);
+          setUserLocation({ latitude: 14.5995, longitude: 120.9842 });
+          setIncidentLocation({ latitude: 14.5995, longitude: 120.9842 });
+          
+          // Get address for fallback location using Nominatim
+          try {
+            const response = await axios.get(
+              `https://nominatim.openstreetmap.org/reverse?format=json&lat=14.5995&lon=120.9842&zoom=18&addressdetails=1`,
+              { headers: { 'User-Agent': 'VeridianApp/1.0' } }
+            );
+            if (response.data && response.data.display_name) {
+              const addr = response.data.address || {};
+              const street = addr.road || addr.street || '';
+              const city = addr.city || addr.town || addr.village || '';
+              const region = addr.state || addr.county || '';
+              const simplifiedAddr = [street, city, region].filter(Boolean).join(', ') || 'Manila, Philippines';
+              setIncidentAddress(simplifiedAddr);
+            }
+          } catch (err) {
+            setIncidentAddress('Manila, Philippines');
+          }
         }
+        setLocationReady(true);
       } catch (err) {
         console.log('Initial location error:', err);
         // Default to a location if GPS fails
         setUserLocation({ latitude: 14.5995, longitude: 120.9842 });
         setIncidentLocation({ latitude: 14.5995, longitude: 120.9842 });
+        setLocationReady(true);
       }
     };
     getUserLocation();
@@ -103,16 +130,26 @@ export default function QuickReportScreen({ route, navigation }) {
     const { latitude, longitude } = coordinate;
     setIncidentLocation({ latitude, longitude });
     
-    // Reverse geocode new location
+    // Use OpenStreetMap Nominatim for reverse geocoding (free, no auth required)
     try {
-      const geocode = await Location.reverseGeocodeAsync({ latitude, longitude });
-      if (geocode.length > 0) {
-        const g = geocode[0];
-        const addr = `${g.street || ''} ${g.city || ''} ${g.region || ''}`.trim();
-        setIncidentAddress(addr);
+      const response = await axios.get(
+        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1`,
+        { headers: { 'User-Agent': 'VeridianApp/1.0' } }
+      );
+      
+      if (response.data && response.data.display_name) {
+        // Simplify the address - just use the main parts
+        const addr = response.data.address || {};
+        const street = addr.road || addr.street || '';
+        const city = addr.city || addr.town || addr.village || addr.municipality || '';
+        const region = addr.state || addr.county || '';
+        
+        const simplifiedAddr = [street, city, region].filter(Boolean).join(', ') || response.data.display_name.split(',').slice(0, 3).join(',');
+        setIncidentAddress(simplifiedAddr);
       }
     } catch (err) {
       console.log('Reverse geocode error:', err);
+      setIncidentAddress('Location set on map');
     }
   };
 
@@ -275,6 +312,9 @@ export default function QuickReportScreen({ route, navigation }) {
       // Find the selected incident type for display
       const selectedType = incidentTypes.find(t => t.id === incidentType);
       
+      // Show tracking ID for anonymous users AND citizens
+      const showTrackingId = isAnonymous || user?.role === 'citizen';
+      
       navigation.replace('Confirmation', {
         token,
         user,
@@ -286,7 +326,7 @@ export default function QuickReportScreen({ route, navigation }) {
           severity,
           address: incidentAddress || 'Location set on map',
           time: new Date().toLocaleTimeString(),
-          trackingId: isAnonymous ? trackingId : null
+          trackingId: showTrackingId ? trackingId : null
         },
         isAnonymous
       });

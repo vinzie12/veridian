@@ -29,7 +29,10 @@ export default function LoginScreen({ navigation }) {
         password: password
       });
       Keyboard.dismiss();
-      navigation.replace('Home', { 
+      
+      // Route to appropriate home screen based on role
+      const targetScreen = response.data.user.role === 'citizen' ? 'CitizenHome' : 'Home';
+      navigation.replace(targetScreen, { 
         token: response.data.access_token,
         user: response.data.user 
       });
@@ -72,7 +75,10 @@ export default function LoginScreen({ navigation }) {
         type: 'magiclink'
       });
       Keyboard.dismiss();
-      navigation.replace('Home', { 
+      
+      // Route to appropriate home screen based on role
+      const targetScreen = response.data.user.role === 'citizen' ? 'CitizenHome' : 'Home';
+      navigation.replace(targetScreen, { 
         token: response.data.access_token,
         user: response.data.user 
       });
@@ -104,6 +110,15 @@ export default function LoginScreen({ navigation }) {
         >
           <Text style={styles.quickReportText}>⚠️ QUICK REPORT</Text>
           <Text style={styles.quickReportSubtext}>Report an emergency immediately</Text>
+        </TouchableOpacity>
+
+        {/* Track Report Button */}
+        <TouchableOpacity
+          style={styles.trackReportButton}
+          onPress={() => navigation.navigate('TrackReport')}
+        >
+          <Text style={styles.trackReportText}>🔍 TRACK REPORT</Text>
+          <Text style={styles.trackReportSubtext}>Check status of your incident</Text>
         </TouchableOpacity>
 
         {/* Divider */}

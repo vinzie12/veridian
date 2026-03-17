@@ -13,6 +13,9 @@ const SEVERITY_COLORS = {
 export default function ConfirmationScreen({ route, navigation }) {
   const { token, user, incident, isAnonymous } = route.params;
 
+  // Determine which home screen to navigate to based on user role
+  const homeScreen = user?.role === 'citizen' ? 'CitizenHome' : 'Home';
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.content}>
@@ -29,8 +32,8 @@ export default function ConfirmationScreen({ route, navigation }) {
             : 'All units have been notified'}
         </Text>
 
-        {/* Tracking ID for anonymous users */}
-        {isAnonymous && incident.trackingId && (
+        {/* Tracking ID for anonymous users and citizens */}
+        {(isAnonymous || user?.role === 'citizen') && incident.trackingId && (
           <View style={styles.trackingCard}>
             <Text style={styles.trackingLabel}>TRACKING ID</Text>
             <Text style={styles.trackingId}>{incident.trackingId}</Text>
@@ -90,10 +93,7 @@ export default function ConfirmationScreen({ route, navigation }) {
           <>
             <TouchableOpacity
               style={styles.trackBtn}
-              onPress={() => {
-                // TODO: Navigate to tracking screen
-                Alert.alert('Track Report', 'Report tracking coming soon!');
-              }}
+              onPress={() => navigation.replace('TrackReport')}
             >
               <Text style={styles.trackBtnText}>TRACK MY REPORT</Text>
             </TouchableOpacity>
@@ -109,14 +109,14 @@ export default function ConfirmationScreen({ route, navigation }) {
           <>
             <TouchableOpacity
               style={styles.addDetailsBtn}
-              onPress={() => navigation.replace('Home', { token, user })}
+              onPress={() => navigation.replace(homeScreen, { token, user })}
             >
-              <Text style={styles.addDetailsText}>ADD MORE DETAILS</Text>
+              <Text style={styles.addDetailsText}>VIEW MY REPORTS</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               style={styles.homeBtn}
-              onPress={() => navigation.replace('Home', { token, user })}
+              onPress={() => navigation.replace(homeScreen, { token, user })}
             >
               <Text style={styles.homeBtnText}>BACK TO HOME</Text>
             </TouchableOpacity>

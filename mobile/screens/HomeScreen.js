@@ -1,37 +1,61 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   View, Text, StyleSheet, FlatList,
-  TouchableOpacity, ActivityIndicator
+  TouchableOpacity, ActivityIndicator, ScrollView
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useIsFocused } from '@react-navigation/native';
 import axios from 'axios';
 
 import { API_URL } from '../lib/supabase';
+import { 
+  SEVERITY_COLORS, STATUS_COLORS, STATUS_ICONS, 
+  STATUS_LABELS, INCIDENT_ICONS 
+} from '../constants';
 
-const SEVERITY_COLORS = {
-  critical: '#FF0000',
-  high: '#FF6600',
-  medium: '#FFAA00',
-  low: '#00CC44'
-};
-
-const INCIDENT_ICONS = {
-  fire: '🔥',
-  medical: '🚑',
-  police: '🚔'
-};
+const STATUS_FILTERS = ['all', 'pending_review', 'acknowledged', 'en_route', 'on_scene', 'resolved', 'closed'];
 
 export default function HomeScreen({ route, navigation }) {
   const { token, user } = route.params;
   const [incidents, setIncidents] = useState([]);
+  const [allIncidents, setAllIncidents] = useState([]); // Store all incidents for counting
   const [loading, setLoading] = useState(true);
+  const [selectedStatus, setSelectedStatus] = useState('all');
+  const isFocused = useIsFocused();
+
+  // Calculate counts per status from all incidents
+  const statusCounts = useMemo(() => {
+    const counts = { all: allIncidents.length };
+    allIncidents.forEach(incident => {
+      const status = incident.status || 'unknown';
+      counts[status] = (counts[status] || 0) + 1;
+    });
+    return counts;
+  }, [allIncidents]);
 
   const fetchIncidents = async () => {
     try {
-      const response = await axios.get(`${API_URL}/incidents`, {
+      // Fetch all incidents for counting
+      const allResponse = await axios.get(`${API_URL}/incidents?filter=all`, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      setIncidents(response.data.incidents);
+      setAllIncidents(allResponse.data.incidents);
+
+      // Fetch filtered incidents for display
+      const filterParam = selectedStatus === 'all' ? 'all' : selectedStatus;
+      const response = await axios.get(`${API_URL}/incidents?filter=${filterParam}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      // If specific status selected, filter locally for exact match
+      if (selectedStatus !== 'all') {
+        const filtered = allResponse.data.incidents.filter(
+          inc => inc.status === selectedStatus
+        );
+        setIncidents(filtered);
+      } else {
+        setIncidents(allResponse.data.incidents);
+      }
     } catch (error) {
       console.error('Failed to fetch incidents:', error);
     } finally {
@@ -40,27 +64,81 @@ export default function HomeScreen({ route, navigation }) {
   };
 
   useEffect(() => {
-    fetchIncidents();
+    if (isFocused) {
+      setLoading(true);
+      fetchIncidents();
+    }
     const interval = setInterval(fetchIncidents, 10000);
     return () => clearInterval(interval);
-  }, []);
+  }, [isFocused, selectedStatus]);
+
+  const renderStatusBadge = (status) => {
+    const isSelected = selectedStatus === status;
+    const count = statusCounts[status] || 0;
+    const color = status === 'all' ? '#00ff88' : (STATUS_COLORS[status] || '#666');
+    const icon = status === 'all' ? '📊' : (STATUS_ICONS[status] || '❓');
+    const label = status === 'all' ? 'ALL' : (STATUS_LABELS[status] || status.toUpperCase());
+
+    return (
+      <TouchableOpacity
+        key={status}
+        style={styles.statusBadge}
+        onPress={() => setSelectedStatus(status)}
+        activeOpacity={0.7}
+      >
+        {/* Ring with icon */}
+        <View style={[
+          styles.statusRing,
+          isSelected && { borderColor: color, shadowColor: color, shadowOpacity: 0.8, shadowRadius: 8 },
+          !isSelected && { borderColor: '#333', opacity: 0.6 }
+        ]}>
+          <Text style={styles.statusIcon}>{icon}</Text>
+          
+          {/* Count bubble */}
+          {count > 0 && (
+            <View style={[styles.countBubble, { backgroundColor: color }]}>
+              <Text style={styles.countText}>{count}</Text>
+            </View>
+          )}
+        </View>
+        
+        {/* Label */}
+        <Text style={[
+          styles.statusLabel,
+          isSelected && { color: color },
+          !isSelected && { color: '#444' }
+        ]}>
+          {label}
+        </Text>
+      </TouchableOpacity>
+    );
+  };
 
   const renderIncident = ({ item }) => (
-    <View style={styles.incidentCard}>
+    <TouchableOpacity 
+      style={styles.incidentCard}
+      onPress={() => navigation.navigate('IncidentDetail', { token, incidentId: item.id })}
+      activeOpacity={0.7}
+    >
       <View style={styles.incidentLeft}>
-        <Text style={styles.incidentIcon}>{INCIDENT_ICONS[item.incident_type]}</Text>
+        <Text style={styles.incidentIcon}>{item.incident_icon || INCIDENT_ICONS[item.incident_type] || '⚠️'}</Text>
       </View>
       <View style={styles.incidentMiddle}>
-        <Text style={styles.incidentType}>{item.incident_type.toUpperCase()}</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <Text style={styles.incidentType}>{(item.incident_type || 'unknown').toUpperCase()}</Text>
+          <View style={[styles.statusBadge, { backgroundColor: STATUS_COLORS[item.status] || '#666' }]}>
+            <Text style={styles.statusText}>{(item.status || 'unknown').toUpperCase().replace('_', ' ')}</Text>
+          </View>
+        </View>
         <Text style={styles.incidentAddress}>{item.address || 'No address'}</Text>
         <Text style={styles.incidentTime}>
           {new Date(item.created_at).toLocaleTimeString()}
         </Text>
       </View>
-      <View style={[styles.severityBadge, { backgroundColor: SEVERITY_COLORS[item.severity] }]}>
-        <Text style={styles.severityText}>{item.severity.toUpperCase()}</Text>
+      <View style={[styles.severityBadge, { backgroundColor: SEVERITY_COLORS[item.severity] || '#666' }]}>
+        <Text style={styles.severityText}>{(item.severity || 'unknown').toUpperCase()}</Text>
       </View>
-    </View>
+    </TouchableOpacity>
   );
 
   return (
@@ -86,11 +164,22 @@ export default function HomeScreen({ route, navigation }) {
 
       {/* Incidents List */}
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>ACTIVE INCIDENTS</Text>
+        {/* Status Badge Row */}
+        <ScrollView 
+          horizontal 
+          showsHorizontalScrollIndicator={false}
+          style={styles.statusRow}
+          contentContainerStyle={styles.statusRowContent}
+        >
+          {STATUS_FILTERS.map(renderStatusBadge)}
+        </ScrollView>
+        
         {loading ? (
           <ActivityIndicator color="#00ff88" size="large" style={{ marginTop: 40 }} />
         ) : incidents.length === 0 ? (
-          <Text style={styles.emptyText}>No active incidents</Text>
+          <Text style={styles.emptyText}>
+            No incidents{selectedStatus !== 'all' ? ` with status "${selectedStatus}"` : ''}
+          </Text>
         ) : (
           <FlatList
             data={incidents}
@@ -144,12 +233,51 @@ const styles = StyleSheet.create({
   },
   settingsIcon: { fontSize: 18 },
   section: { flex: 1, padding: 20 },
-  sectionTitle: {
-    color: '#666',
-    fontSize: 11,
-    fontWeight: 'bold',
-    letterSpacing: 2,
+  statusRow: {
     marginBottom: 16
+  },
+  statusRowContent: {
+    paddingHorizontal: 4,
+    gap: 12
+  },
+  statusBadge: {
+    alignItems: 'center',
+    width: 70
+  },
+  statusRing: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    borderWidth: 3,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 6,
+    backgroundColor: '#1a1a1a'
+  },
+  statusIcon: {
+    fontSize: 22
+  },
+  countBubble: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6
+  },
+  countText: {
+    color: '#0a0a0a',
+    fontSize: 11,
+    fontWeight: 'bold'
+  },
+  statusLabel: {
+    fontSize: 9,
+    fontWeight: 'bold',
+    letterSpacing: 0.5,
+    textAlign: 'center'
   },
   emptyText: { color: '#333', fontSize: 16, textAlign: 'center', marginTop: 40 },
   incidentCard: {
@@ -166,6 +294,12 @@ const styles = StyleSheet.create({
   incidentType: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
   incidentAddress: { color: '#888', fontSize: 12, marginTop: 2 },
   incidentTime: { color: '#444', fontSize: 11, marginTop: 4 },
+  statusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4
+  },
+  statusText: { color: '#fff', fontSize: 8, fontWeight: 'bold' },
   severityBadge: {
     paddingHorizontal: 10,
     paddingVertical: 6,

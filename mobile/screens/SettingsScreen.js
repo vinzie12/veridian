@@ -7,6 +7,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 export default function SettingsScreen({ route, navigation }) {
   const { user } = route.params;
 
+  const isCitizen = user?.role === 'citizen';
+
   const handleLogout = () => {
     Alert.alert(
       'Logout',
@@ -44,21 +46,38 @@ export default function SettingsScreen({ route, navigation }) {
               <Text style={styles.label}>Name</Text>
               <Text style={styles.value}>{user.full_name}</Text>
             </View>
-            <View style={styles.divider} />
-            <View style={styles.row}>
-              <Text style={styles.label}>Badge</Text>
-              <Text style={styles.value}>{user.badge_number}</Text>
-            </View>
+            {!isCitizen && user.badge_number && (
+              <>
+                <View style={styles.divider} />
+                <View style={styles.row}>
+                  <Text style={styles.label}>Badge</Text>
+                  <Text style={styles.value}>{user.badge_number}</Text>
+                </View>
+              </>
+            )}
             <View style={styles.divider} />
             <View style={styles.row}>
               <Text style={styles.label}>Role</Text>
               <Text style={styles.value}>{user.role.toUpperCase()}</Text>
             </View>
-            <View style={styles.divider} />
-            <View style={styles.row}>
-              <Text style={styles.label}>Agency</Text>
-              <Text style={styles.value}>{user.agency}</Text>
-            </View>
+            {!isCitizen && user.agency && (
+              <>
+                <View style={styles.divider} />
+                <View style={styles.row}>
+                  <Text style={styles.label}>Agency</Text>
+                  <Text style={styles.value}>{user.agency}</Text>
+                </View>
+              </>
+            )}
+            {isCitizen && (
+              <>
+                <View style={styles.divider} />
+                <View style={styles.row}>
+                  <Text style={styles.label}>Email</Text>
+                  <Text style={styles.value}>{user.email}</Text>
+                </View>
+              </>
+            )}
           </View>
         </View>
 

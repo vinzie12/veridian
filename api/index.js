@@ -318,8 +318,15 @@ app.post('/auth/login-legacy', async (req, res) => {
 app.post('/auth/signup', async (req, res) => {
   const { badge_number, password, full_name, email, role, agency_id } = req.body;
 
-  if (!email || !password || !full_name || !agency_id) {
-    return res.status(400).json({ error: 'Email, password, full name, and agency are required' });
+  // Agency required for responders, optional for citizens
+  if (!email || !password || !full_name) {
+    return res.status(400).json({ error: 'Email, password, and full name are required' });
+  }
+
+  const isCitizen = role === 'citizen';
+  
+  if (!isCitizen && !agency_id) {
+    return res.status(400).json({ error: 'Agency is required for responder accounts' });
   }
 
   try {
@@ -362,7 +369,7 @@ app.post('/auth/signup', async (req, res) => {
         full_name,
         badge_number,
         role: role || 'field_responder',
-        agency_id,
+        agency_id: isCitizen ? null : agency_id, // Null for citizens
         status: 'active'
       })
       .select(`
@@ -405,14 +412,67 @@ app.post('/auth/signup', async (req, res) => {
 // PROTECTED ROUTES — login required
 // ============================================
 app.get('/incidents', authenticateToken, async (req, res) => {
-  const { data, error } = await supabaseAdmin
-    .from('incidents')
-    .select('*')
-    .eq('agency_id', req.user.agency_id)
-    .order('created_at', { ascending: false });
+  try {
+    const { filter, submitted_by, limit } = req.query; // 'active', 'closed', 'all', 'submitted_by=me', limit
+    
+    let query = supabaseAdmin
+      .from('incidents')
+      .select(`
+        *,
+        incident_types:incident_type_id (id, name, icon, color_code)
+      `)
+      .order('created_at', { ascending: false });
 
-  if (error) return res.status(500).json({ error: error.message });
-  res.json({ incidents: data });
+    // Handle submitted_by=me for citizens viewing their own reports
+    if (submitted_by === 'me') {
+      query = query.eq('reporter_id', req.user.id);
+    } else {
+      // Check if user has an agency (citizens have null agency_id)
+      const hasAgency = req.user.agency_id !== null;
+      const perms = PERMISSIONS[req.user.role];
+
+      if (!hasAgency) {
+        // Citizens without agency can only see their own reported incidents
+        query = query.eq('reporter_id', req.user.id);
+      } else if (perms?.crossAgency || req.user.role === 'dispatcher' || req.user.role === 'commander') {
+        // For dispatchers/commanders, show both agency incidents AND anonymous public incidents
+        query = query.or(`agency_id.eq.${req.user.agency_id},agency_id.is.null`);
+      } else {
+        // Regular users only see their agency's incidents
+        query = query.eq('agency_id', req.user.agency_id);
+      }
+    }
+
+    // Filter by status based on query parameter
+    if (filter === 'active') {
+      query = query.not('status', 'in', '(resolved,closed,cancelled)');
+    } else if (filter === 'closed') {
+      query = query.in('status', ['resolved', 'closed', 'cancelled']);
+    }
+    // If filter is 'all' or not specified, show all incidents
+
+    // Apply limit if specified
+    if (limit) {
+      query = query.limit(parseInt(limit));
+    }
+
+    const { data, error } = await query;
+
+    if (error) return res.status(500).json({ error: error.message });
+    
+    // Transform data to include incident_type info
+    const incidents = data.map(incident => ({
+      ...incident,
+      incident_type: incident.incident_types?.name || incident.incident_type || 'unknown',
+      incident_icon: incident.incident_types?.icon || '⚠️',
+      incident_color: incident.incident_types?.color_code || '#666'
+    }));
+    
+    res.json({ incidents });
+  } catch (err) {
+    console.error('Incidents fetch error:', err);
+    res.status(500).json({ error: 'Failed to fetch incidents' });
+  }
 });
 
 app.get('/me', authenticateToken, async (req, res) => {
@@ -569,6 +629,25 @@ app.post('/incidents', authenticateToken, checkPermission('canCreate'), async (r
   }
 
   const userId = req.user.id || req.user.user_id;
+  const isCitizen = req.user.role === 'citizen';
+
+  // Generate tracking ID for citizens
+  let trackingId = null;
+  if (isCitizen) {
+    trackingId = generateTrackingId();
+    let attempts = 0;
+    while (attempts < 10) {
+      const { data: existing } = await supabaseAdmin
+        .from('incidents')
+        .select('tracking_id')
+        .eq('tracking_id', trackingId)
+        .single();
+      
+      if (!existing) break;
+      trackingId = generateTrackingId();
+      attempts++;
+    }
+  }
 
   const { data, error } = await supabaseAdmin
     .from('incidents')
@@ -576,48 +655,112 @@ app.post('/incidents', authenticateToken, checkPermission('canCreate'), async (r
       agency_id: req.user.agency_id,
       reporter_id: userId,
       incident_type_id,
+      tracking_id: trackingId,
       severity,
       latitude,
       longitude,
       address,
       description,
-      extra_fields: extra_fields || {}
+      extra_fields: extra_fields || {},
+      status: 'pending_review' // Default status for new incidents
     })
     .select()
     .single();
 
   if (error) return res.status(500).json({ error: error.message });
-  res.status(201).json({ message: 'Incident created!', incident: data });
+  res.status(201).json({ 
+    message: 'Incident created!', 
+    incident: data,
+    tracking_id: trackingId
+  });
 });
 
 
 // Get single incident
 app.get('/incidents/:id', authenticateToken, async (req, res) => {
-  const { data, error } = await supabaseAdmin
-    .from('incidents')
-    .select('*')
-    .eq('id', req.params.id)
-    .eq('agency_id', req.user.agency_id)
-    .single();
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('incidents')
+      .select(`
+        *,
+        incident_types:incident_type_id (id, name, icon, color_code)
+      `)
+      .eq('id', req.params.id)
+      .single();
 
-  if (error) return res.status(500).json({ error: error.message });
-  res.json({ incident: data });
+    if (error) {
+      return res.status(500).json({ error: error.message });
+    }
+
+    if (!data) {
+      return res.status(404).json({ error: 'Incident not found' });
+    }
+
+    // Check access: user's agency OR anonymous incident (agency_id is null)
+    const perms = PERMISSIONS[req.user.role];
+    const hasAccess = data.agency_id === req.user.agency_id || 
+                       data.agency_id === null ||
+                       perms?.crossAgency;
+
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Access denied to this incident' });
+    }
+
+    // Transform to include incident_type info
+    const incident = {
+      ...data,
+      incident_type: data.incident_types?.name || data.incident_type || 'unknown',
+      incident_icon: data.incident_types?.icon || '⚠️',
+      incident_color: data.incident_types?.color_code || '#666'
+    };
+
+    res.json({ incident });
+  } catch (err) {
+    console.error('Get incident error:', err);
+    res.status(500).json({ error: 'Failed to fetch incident' });
+  }
 });
 
 // Update incident status
 app.patch('/incidents/:id', authenticateToken, checkPermission('canUpdate'), async (req, res) => {
   const { status, description, extra_fields } = req.body;
 
-  const { data, error } = await supabaseAdmin
-    .from('incidents')
-    .update({ status, description, extra_fields, updated_at: new Date().toISOString() })
-    .eq('id', req.params.id)
-    .eq('agency_id', req.user.agency_id)
-    .select()
-    .single();
+  try {
+    // First check if user has access to this incident
+    const { data: incident, error: fetchError } = await supabaseAdmin
+      .from('incidents')
+      .select('id, agency_id')
+      .eq('id', req.params.id)
+      .single();
 
-  if (error) return res.status(500).json({ error: error.message });
-  res.json({ message: 'Incident updated!', incident: data });
+    if (fetchError || !incident) {
+      return res.status(404).json({ error: 'Incident not found' });
+    }
+
+    // Check access: user's agency OR anonymous incident (agency_id is null)
+    const perms = PERMISSIONS[req.user.role];
+    const hasAccess = incident.agency_id === req.user.agency_id || 
+                       incident.agency_id === null ||
+                       perms?.crossAgency;
+
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Access denied to this incident' });
+    }
+
+    // Update the incident
+    const { data, error } = await supabaseAdmin
+      .from('incidents')
+      .update({ status, description, extra_fields, updated_at: new Date().toISOString() })
+      .eq('id', req.params.id)
+      .select()
+      .single();
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ message: 'Incident updated!', incident: data });
+  } catch (err) {
+    console.error('Update incident error:', err);
+    res.status(500).json({ error: 'Failed to update incident' });
+  }
 });
 
 // Delete incident

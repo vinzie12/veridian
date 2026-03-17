@@ -115,6 +115,26 @@ export const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 4
   },
+  trackReportButton: {
+    backgroundColor: '#1a1a1a',
+    padding: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#00ff88'
+  },
+  trackReportText: {
+    color: '#00ff88',
+    fontSize: 16,
+    fontWeight: 'bold',
+    letterSpacing: 2
+  },
+  trackReportSubtext: {
+    color: '#666',
+    fontSize: 12,
+    marginTop: 4
+  },
   loginToggleButton: {
     backgroundColor: '#1a1a1a',
     padding: 18,
