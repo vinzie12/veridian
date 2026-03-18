@@ -108,6 +108,22 @@ export const getCurrentUser = async () => {
   return user;
 };
 
+// Set session from access token (called after backend login)
+export const setSession = async (accessToken, refreshToken = null) => {
+  const { data, error } = await supabase.auth.setSession({
+    access_token: accessToken,
+    refresh_token: refreshToken,
+  });
+  
+  if (error) {
+    console.error('Failed to set session:', error);
+    return false;
+  }
+  
+  console.log('Supabase session set successfully');
+  return true;
+};
+
 // Listen to auth state changes
 export const onAuthStateChange = (callback) => {
   return supabase.auth.onAuthStateChange(callback);

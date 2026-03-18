@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import axios from 'axios';
-import { API_URL } from '../lib/supabase';
+import { API_URL, setSession } from '../lib/supabase';
 import { styles } from './styles/LoginScreenStyles';
 
 export default function LoginScreen({ navigation }) {
@@ -29,6 +29,9 @@ export default function LoginScreen({ navigation }) {
         password: password
       });
       Keyboard.dismiss();
+      
+      // Set Supabase session from access token
+      await setSession(response.data.access_token, response.data.refresh_token);
       
       // Route to appropriate home screen based on role
       const targetScreen = response.data.user.role === 'citizen' ? 'CitizenHome' : 'Home';
@@ -75,6 +78,9 @@ export default function LoginScreen({ navigation }) {
         type: 'magiclink'
       });
       Keyboard.dismiss();
+      
+      // Set Supabase session from access token
+      await setSession(response.data.access_token, response.data.refresh_token);
       
       // Route to appropriate home screen based on role
       const targetScreen = response.data.user.role === 'citizen' ? 'CitizenHome' : 'Home';

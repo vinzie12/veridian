@@ -778,6 +778,195 @@ app.delete('/incidents/:id', authenticateToken, checkPermission('canDelete'), as
   res.json({ message: 'Incident deleted!', incident: data });
 });
 
+// ============================================
+// LIVEKIT CALL TOKEN ENDPOINT
+// ============================================
+
+// LiveKit configuration - set these in your .env
+const LIVEKIT_API_KEY = process.env.LIVEKIT_API_KEY;
+const LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET;
+const LIVEKIT_SERVER_URL = process.env.LIVEKIT_SERVER_URL; // e.g., wss://your-app.livekit.cloud
+
+// In-memory store for active calls (in production, use Redis/database)
+const activeCalls = new Map();
+
+/**
+ * Generate LiveKit access token
+ * POST /call/token
+ * Body: { incidentId, role }
+ * Returns: { token, roomName, serverUrl }
+ */
+app.post('/call/token', authenticateToken, async (req, res) => {
+  const { incidentId, role } = req.body;
+
+  if (!incidentId) {
+    return res.status(400).json({ error: 'incidentId is required' });
+  }
+
+  // Check if LiveKit credentials are configured
+  if (!LIVEKIT_API_KEY || !LIVEKIT_API_SECRET || !LIVEKIT_SERVER_URL) {
+    // Return mock response for development
+    console.warn('LiveKit credentials not configured, returning mock token');
+    return res.json({
+      token: 'mock_token_' + Date.now(),
+      roomName: 'room_' + incidentId.slice(0, 8),
+      serverUrl: null,
+      warning: 'Using mock token - configure LIVEKIT_API_KEY, LIVEKIT_API_SECRET, and LIVEKIT_SERVER_URL in .env'
+    });
+  }
+
+  try {
+    // Import LiveKit Server SDK
+    const { AccessToken } = require('livekit-server-sdk');
+    
+    // Create room name from incident ID
+    const roomName = `verification-${incidentId.slice(0, 8)}`;
+    
+    // Map app role to LiveKit role (admin = can publish, reporter = can publish)
+    const isAdmin = role === 'admin';
+    
+    // Create access token
+    const at = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, {
+      identity: req.user.id,
+      name: req.user.full_name || req.user.email,
+    });
+    
+    // Add grants
+    at.addGrant({
+      roomJoin: true,
+      room: roomName,
+      canPublish: true,
+      canSubscribe: true,
+      canPublishData: true,
+      // Admin can publish camera, reporter starts audio-only
+      canPublishSources: isAdmin 
+        ? ['camera', 'microphone', 'screen_share', 'screen_share_audio']
+        : ['microphone'],
+    });
+    
+    const token = at.toJwt();
+    
+    // Track active call
+    activeCalls.set(incidentId, { roomName, startedAt: new Date() });
+    
+    res.json({
+      token,
+      roomName,
+      serverUrl: LIVEKIT_SERVER_URL
+    });
+  } catch (err) {
+    console.error('Call token error:', err);
+    res.status(500).json({ error: err.message || 'Failed to generate call token' });
+  }
+});
+
+/**
+ * Get active call status for an incident
+ * GET /call/status/:incidentId
+ */
+app.get('/call/status/:incidentId', authenticateToken, async (req, res) => {
+  const { incidentId } = req.params;
+  const callInfo = activeCalls.get(incidentId);
+  
+  res.json({
+    hasActiveCall: !!callInfo,
+    roomName: callInfo?.roomName || null,
+    startedAt: callInfo?.startedAt || null
+  });
+});
+
+/**
+ * End call and cleanup
+ * DELETE /call/:incidentId
+ */
+app.delete('/call/:incidentId', authenticateToken, async (req, res) => {
+  const { incidentId } = req.params;
+  
+  if (activeCalls.has(incidentId)) {
+    activeCalls.delete(incidentId);
+  }
+  
+  res.json({ message: 'Call ended' });
+});
+
+// ============================================
+// NOTIFICATIONS ENDPOINT
+// ============================================
+
+/**
+ * Send push notification for incoming call
+ * POST /notifications/call
+ * 
+ * This endpoint is called when a call session is created
+ * It sends a push notification to the callee
+ */
+app.post('/notifications/call', async (req, res) => {
+  const { calleeId, callSessionId, callerName, type } = req.body;
+  
+  if (!calleeId || !callSessionId) {
+    return res.status(400).json({ error: 'calleeId and callSessionId are required' });
+  }
+  
+  try {
+    // Get push token from user profile
+    const { data: profile, error } = await supabaseAdmin
+      .from('users')
+      .select('push_token')
+      .eq('id', calleeId)
+      .single();
+    
+    if (error || !profile?.push_token) {
+      console.log('No push token found for user:', calleeId);
+      return res.json({ 
+        success: false, 
+        message: 'User has no push token registered' 
+      });
+    }
+    
+    const pushToken = profile.push_token;
+    
+    // Validate it's an Expo push token
+    if (!pushToken.startsWith('ExponentPushToken')) {
+      return res.json({ 
+        success: false, 
+        message: 'Invalid push token format' 
+      });
+    }
+    
+    // Send notification via Expo Push API
+    const message = {
+      to: pushToken,
+      sound: 'default',
+      title: 'Incoming Verification Call',
+      body: `${callerName || 'Admin'} is calling you`,
+      data: {
+        type: type || 'incoming_call',
+        callSessionId,
+        calleeId,
+      },
+      priority: 'high',
+      channelId: 'calls',
+    };
+    
+    const response = await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(message),
+    });
+    
+    const result = await response.json();
+    
+    console.log('Push notification sent:', result);
+    res.json({ success: true, result });
+  } catch (err) {
+    console.error('Failed to send notification:', err);
+    res.status(500).json({ error: err.message || 'Failed to send notification' });
+  }
+});
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });
