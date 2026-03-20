@@ -4,11 +4,11 @@ import {
   ActivityIndicator, Alert, Keyboard
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import axios from 'axios';
-import { API_URL, setSession } from '../lib/supabase';
+import { useAuth } from '../src/context/AuthContext';
 import { styles } from './styles/LoginScreenStyles';
 
 export default function LoginScreen({ navigation }) {
+  const { login: authLogin, loginWithOtp: authLoginWithOtp, isLoading: authLoading } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [otpToken, setOtpToken] = useState('');
@@ -24,24 +24,17 @@ export default function LoginScreen({ navigation }) {
     }
     setLoading(true);
     try {
-      const response = await axios.post(`${API_URL}/auth/login`, {
-        email: email,
-        password: password
-      });
+      const result = await authLogin(email, password);
       Keyboard.dismiss();
       
-      // Set Supabase session from access token
-      await setSession(response.data.access_token, response.data.refresh_token);
-      
-      // Route to appropriate home screen based on role
-      const targetScreen = response.data.user.role === 'citizen' ? 'CitizenHome' : 'Home';
-      navigation.replace(targetScreen, { 
-        token: response.data.access_token,
-        user: response.data.user 
-      });
+      if (result.success) {
+        // Navigation is handled by RootNavigator based on auth state
+        // No need to pass token in params - it's in AuthContext
+      } else {
+        Alert.alert('Login Failed', result.error?.message || 'Invalid email or password');
+      }
     } catch (error) {
-      const message = error.response?.data?.error || 'Invalid email or password';
-      Alert.alert('Login Failed', message);
+      Alert.alert('Login Failed', error.message || 'An error occurred');
     } finally {
       setLoading(false);
     }
@@ -54,12 +47,13 @@ export default function LoginScreen({ navigation }) {
     }
     setLoading(true);
     try {
-      await axios.post(`${API_URL}/auth/login/otp`, { email });
+      // Use authService from auth.js instead of apiClient
+      const { sendOtp } = require('../src/services/auth');
+      await sendOtp(email);
       setOtpSent(true);
       Alert.alert('OTP Sent', 'Check your email for a login link');
     } catch (error) {
-      const message = error.response?.data?.error || 'Failed to send OTP';
-      Alert.alert('Error', message);
+      Alert.alert('Error', error.message || 'Failed to send OTP');
     } finally {
       setLoading(false);
     }
@@ -72,25 +66,16 @@ export default function LoginScreen({ navigation }) {
     }
     setLoading(true);
     try {
-      const response = await axios.post(`${API_URL}/auth/login/verify-otp`, {
-        email: email,
-        token: otpToken,
-        type: 'magiclink'
-      });
+      const result = await authLoginWithOtp(email, otpToken);
       Keyboard.dismiss();
       
-      // Set Supabase session from access token
-      await setSession(response.data.access_token, response.data.refresh_token);
-      
-      // Route to appropriate home screen based on role
-      const targetScreen = response.data.user.role === 'citizen' ? 'CitizenHome' : 'Home';
-      navigation.replace(targetScreen, { 
-        token: response.data.access_token,
-        user: response.data.user 
-      });
+      if (result.success) {
+        // Navigation handled by RootNavigator
+      } else {
+        Alert.alert('Verification Failed', result.error?.message || 'Invalid OTP token');
+      }
     } catch (error) {
-      const message = error.response?.data?.error || 'Invalid OTP token';
-      Alert.alert('Verification Failed', message);
+      Alert.alert('Verification Failed', error.message || 'An error occurred');
     } finally {
       setLoading(false);
     }

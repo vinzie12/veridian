@@ -4,9 +4,10 @@ import {
   SafeAreaView, ActivityIndicator, Alert, ScrollView, Dimensions
 } from 'react-native';
 import * as Location from 'expo-location';
-import axios from 'axios';
 import { WebView } from 'react-native-webview';
-import { API_URL } from '../lib/supabase';
+
+import { useAuth } from '../src/context/AuthContext';
+import { incidentService, configService } from '../src/services/apiClient';
 import { styles } from './styles/QuickReportScreenStyles';
 
 const { width } = Dimensions.get('window');
@@ -18,8 +19,8 @@ const SEVERITIES = [
   { level: 'low', label: 'Low', color: '#00CC44', desc: 'Non-urgent' }
 ];
 
-export default function QuickReportScreen({ route, navigation }) {
-  const { token, user } = route.params || {};
+export default function QuickReportScreen({ navigation }) {
+  const { user, isLoggedIn } = useAuth();
   const [incidentTypes, setIncidentTypes] = useState([]);
   const [incidentType, setIncidentType] = useState(null);
   const [severity, setSeverity] = useState(null);
@@ -38,18 +39,29 @@ export default function QuickReportScreen({ route, navigation }) {
   const [incidentAddress, setIncidentAddress] = useState('');
   const webViewRef = useRef(null);
 
-  const isAnonymous = !token;
+  const isAnonymous = !isLoggedIn;
 
   // Get displayed incident types (first 3 or all)
-  const displayedTypes = showAllTypes ? incidentTypes : incidentTypes.slice(0, 3);
-  const hasMoreTypes = incidentTypes.length > 3;
+  const displayedTypes = showAllTypes ? incidentTypes : (incidentTypes || []).slice(0, 3);
+  const hasMoreTypes = (incidentTypes || []).length > 3;
 
   // Fetch incident types from API
   useEffect(() => {
     const fetchIncidentTypes = async () => {
       try {
-        const response = await axios.get(`${API_URL}/incident-types`);
-        setIncidentTypes(response.data.incidentTypes || []);
+        const response = await incidentService.getTypes();
+        // Handle different response structures
+        let types = [];
+        if (Array.isArray(response)) {
+          types = response;
+        } else if (Array.isArray(response?.data)) {
+          types = response.data;
+        } else if (Array.isArray(response?.data?.incidentTypes)) {
+          types = response.data.incidentTypes;
+        } else if (response?.success && Array.isArray(response.data)) {
+          types = response.data;
+        }
+        setIncidentTypes(types);
       } catch (error) {
         console.log('Error fetching incident types:', error);
         // Fallback to basic types if API fails
@@ -291,9 +303,6 @@ export default function QuickReportScreen({ route, navigation }) {
     setSubmitting(true);
 
     try {
-      const endpoint = isAnonymous ? `${API_URL}/incidents/public` : `${API_URL}/incidents`;
-      const headers = isAnonymous ? {} : { Authorization: `Bearer ${token}` };
-      
       const payload = {
         incident_type_id: incidentType,
         severity,
@@ -304,10 +313,15 @@ export default function QuickReportScreen({ route, navigation }) {
         ...(isAnonymous && { reporter_contact: reporterContact || null })
       };
 
-      const response = await axios.post(endpoint, payload, { headers });
+      let response;
+      if (isAnonymous) {
+        response = await incidentService.createPublic(payload);
+      } else {
+        response = await incidentService.create(payload);
+      }
 
-      const incident = response.data.incident;
-      const trackingId = response.data.tracking_id;
+      const incident = response?.data?.incident || response?.incident || response?.data;
+      const trackingId = response?.data?.tracking_id || response?.tracking_id;
       
       // Find the selected incident type for display
       const selectedType = incidentTypes.find(t => t.id === incidentType);
@@ -316,10 +330,8 @@ export default function QuickReportScreen({ route, navigation }) {
       const showTrackingId = isAnonymous || user?.role === 'citizen';
       
       navigation.replace('Confirmation', {
-        token,
-        user,
         incident: {
-          id: incident.id.slice(0, 8).toUpperCase(),
+          id: incident?.id?.slice(0, 8).toUpperCase() || 'NEW',
           typeId: incidentType,
           typeName: selectedType?.name || 'Unknown',
           typeIcon: selectedType?.icon || '⚠️',
@@ -331,8 +343,8 @@ export default function QuickReportScreen({ route, navigation }) {
         isAnonymous
       });
     } catch (error) {
-      console.log('Submit error:', error.response?.data || error.message);
-      const message = error.response?.data?.error || 'Failed to submit incident. Please try again.';
+      console.log('Submit error:', error);
+      const message = error?.message || 'Failed to submit incident. Please try again.';
       Alert.alert('Submission Failed', message);
     } finally {
       setSubmitting(false);
@@ -357,7 +369,7 @@ export default function QuickReportScreen({ route, navigation }) {
               <Text style={styles.backText}>←</Text>
             </TouchableOpacity>
             <Text style={styles.headerTitle}>Quick Report</Text>
-            <View style={{ width: 40 }} />
+            <View style={styles.headerSpacer} />
           </View>
           <Text style={styles.headerSubtitle}>
             Report an emergency incident quickly

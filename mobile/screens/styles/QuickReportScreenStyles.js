@@ -45,6 +45,9 @@ export const styles = StyleSheet.create({
     color: '#666',
     marginTop: 4,
   },
+  headerSpacer: {
+    width: 40,
+  },
   // Emergency Banner
   emergencyBanner: {
     marginHorizontal: 24,

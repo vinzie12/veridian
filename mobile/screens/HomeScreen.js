@@ -5,9 +5,9 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
-import axios from 'axios';
 
-import { API_URL } from '../lib/supabase';
+import { useAuth } from '../src/context/AuthContext';
+import { incidentService } from '../src/services/apiClient';
 import { 
   SEVERITY_COLORS, STATUS_COLORS, STATUS_ICONS, 
   STATUS_LABELS, INCIDENT_ICONS 
@@ -15,8 +15,8 @@ import {
 
 const STATUS_FILTERS = ['all', 'pending_review', 'acknowledged', 'en_route', 'on_scene', 'resolved', 'closed'];
 
-export default function HomeScreen({ route, navigation }) {
-  const { token, user } = route.params;
+export default function HomeScreen({ navigation }) {
+  const { user } = useAuth();
   const [incidents, setIncidents] = useState([]);
   const [allIncidents, setAllIncidents] = useState([]); // Store all incidents for counting
   const [loading, setLoading] = useState(true);
@@ -36,25 +36,18 @@ export default function HomeScreen({ route, navigation }) {
   const fetchIncidents = async () => {
     try {
       // Fetch all incidents for counting
-      const allResponse = await axios.get(`${API_URL}/incidents?filter=all`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      setAllIncidents(allResponse.data.incidents);
+      const allResponse = await incidentService.list({});
+      const allIncidentsData = allResponse?.data || [];
+      setAllIncidents(allIncidentsData);
 
-      // Fetch filtered incidents for display
-      const filterParam = selectedStatus === 'all' ? 'all' : selectedStatus;
-      const response = await axios.get(`${API_URL}/incidents?filter=${filterParam}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      
       // If specific status selected, filter locally for exact match
       if (selectedStatus !== 'all') {
-        const filtered = allResponse.data.incidents.filter(
+        const filtered = allIncidentsData.filter(
           inc => inc.status === selectedStatus
         );
         setIncidents(filtered);
       } else {
-        setIncidents(allResponse.data.incidents);
+        setIncidents(allIncidentsData);
       }
     } catch (error) {
       console.error('Failed to fetch incidents:', error);
@@ -117,16 +110,16 @@ export default function HomeScreen({ route, navigation }) {
   const renderIncident = ({ item }) => (
     <TouchableOpacity 
       style={styles.incidentCard}
-      onPress={() => navigation.navigate('IncidentDetail', { token, incidentId: item.id })}
+      onPress={() => navigation.navigate('IncidentDetail', { incidentId: item.id })}
       activeOpacity={0.7}
     >
       <View style={styles.incidentLeft}>
         <Text style={styles.incidentIcon}>{item.incident_icon || INCIDENT_ICONS[item.incident_type] || '⚠️'}</Text>
       </View>
       <View style={styles.incidentMiddle}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <View style={styles.incidentTypeRow}>
           <Text style={styles.incidentType}>{(item.incident_type || 'unknown').toUpperCase()}</Text>
-          <View style={[styles.statusBadge, { backgroundColor: STATUS_COLORS[item.status] || '#666' }]}>
+          <View style={[styles.incidentStatusBadge, { backgroundColor: STATUS_COLORS[item.status] || '#666' }]}>
             <Text style={styles.statusText}>{(item.status || 'unknown').toUpperCase().replace('_', ' ')}</Text>
           </View>
         </View>
@@ -175,7 +168,7 @@ export default function HomeScreen({ route, navigation }) {
         </ScrollView>
         
         {loading ? (
-          <ActivityIndicator color="#00ff88" size="large" style={{ marginTop: 40 }} />
+          <ActivityIndicator color="#00ff88" size="large" style={styles.loadingIndicator} />
         ) : incidents.length === 0 ? (
           <Text style={styles.emptyText}>
             No incidents{selectedStatus !== 'all' ? ` with status "${selectedStatus}"` : ''}
@@ -193,7 +186,7 @@ export default function HomeScreen({ route, navigation }) {
       {/* Quick Report Button */}
       <TouchableOpacity
         style={styles.quickReportBtn}
-        onPress={() => navigation.navigate('QuickReport', { token, user })}
+        onPress={() => navigation.navigate('QuickReport')}
       >
         <Text style={styles.quickReportText}>⚡ QUICK REPORT</Text>
       </TouchableOpacity>
@@ -280,6 +273,9 @@ const styles = StyleSheet.create({
     textAlign: 'center'
   },
   emptyText: { color: '#333', fontSize: 16, textAlign: 'center', marginTop: 40 },
+  loadingIndicator: {
+    marginTop: 40
+  },
   incidentCard: {
     backgroundColor: '#1a1a1a',
     borderRadius: 10,
@@ -291,7 +287,17 @@ const styles = StyleSheet.create({
   incidentLeft: { marginRight: 12 },
   incidentIcon: { fontSize: 28 },
   incidentMiddle: { flex: 1 },
+  incidentTypeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8
+  },
   incidentType: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
+  incidentStatusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4
+  },
   incidentAddress: { color: '#888', fontSize: 12, marginTop: 2 },
   incidentTime: { color: '#444', fontSize: 11, marginTop: 4 },
   statusBadge: {

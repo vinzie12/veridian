@@ -3,13 +3,14 @@ import {
   Alert, ScrollView
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useAuth } from '../src/context/AuthContext';
 
-export default function SettingsScreen({ route, navigation }) {
-  const { user } = route.params;
+export default function SettingsScreen({ navigation }) {
+  const { user, logout } = useAuth();
 
   const isCitizen = user?.role === 'citizen';
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     Alert.alert(
       'Logout',
       'Are you sure you want to logout?',
@@ -18,10 +19,10 @@ export default function SettingsScreen({ route, navigation }) {
         { 
           text: 'Logout', 
           style: 'destructive',
-          onPress: () => navigation.reset({
-            index: 0,
-            routes: [{ name: 'Login' }]
-          })
+          onPress: async () => {
+            await logout();
+            // Navigation is handled by RootNavigator based on auth state
+          }
         }
       ]
     );
@@ -34,7 +35,7 @@ export default function SettingsScreen({ route, navigation }) {
           <Text style={styles.back}>← BACK</Text>
         </TouchableOpacity>
         <Text style={styles.title}>SETTINGS</Text>
-        <View style={{ width: 60 }} />
+        <View style={styles.headerSpacer} />
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false}>
@@ -135,6 +136,9 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
     letterSpacing: 3
+  },
+  headerSpacer: {
+    width: 60
   },
   section: {
     padding: 20

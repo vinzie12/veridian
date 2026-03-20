@@ -4,27 +4,10 @@ import {
   ActivityIndicator, Alert, Keyboard
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import axios from 'axios';
-import { API_URL } from '../lib/supabase';
-import { styles } from './styles/QuickReportScreenStyles';
-
-const SEVERITY_COLORS = {
-  critical: '#FF0000',
-  high: '#FF6600',
-  medium: '#FFAA00',
-  low: '#00CC44'
-};
-
-const STATUS_COLORS = {
-  pending: '#FFAA00',
-  pending_review: '#FFAA00',
-  acknowledged: '#0066FF',
-  en_route: '#0066FF',
-  on_scene: '#0066FF',
-  resolved: '#00CC44',
-  closed: '#666666',
-  cancelled: '#666666'
-};
+import { incidentService } from '../src/services/apiClient';
+import { styles } from './styles/TrackReportScreenStyles';
+import { STATUS_COLORS, STATUS_LABELS } from '../constants';
+import { formatDate } from '../src/utils/time';
 
 export default function TrackReportScreen({ navigation }) {
   const [trackingId, setTrackingId] = useState('');
@@ -41,11 +24,11 @@ export default function TrackReportScreen({ navigation }) {
     setIncident(null);
 
     try {
-      const response = await axios.get(`${API_URL}/incidents/public/${trackingId.trim().toUpperCase()}`);
-      setIncident(response.data.incident);
+      const response = await incidentService.getPublic(trackingId.trim().toUpperCase());
+      setIncident(response.incident);
       Keyboard.dismiss();
     } catch (error) {
-      const message = error.response?.data?.error || 'Incident not found. Check your tracking ID.';
+      const message = error?.response?.data?.error || error?.message || 'Incident not found. Check your tracking ID.';
       Alert.alert('Not Found', message);
     } finally {
       setLoading(false);
@@ -70,7 +53,7 @@ export default function TrackReportScreen({ navigation }) {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>ENTER YOUR TRACKING ID</Text>
           <TextInput
-            style={[styles.input, { backgroundColor: '#1a1a1a', borderRadius: 12, padding: 16, fontSize: 18, letterSpacing: 2 }]}
+            style={styles.trackingInput}
             placeholder="e.g. A7X9K2M4"
             placeholderTextColor="#444"
             value={trackingId}
@@ -79,14 +62,14 @@ export default function TrackReportScreen({ navigation }) {
             maxLength={8}
           />
           <TouchableOpacity
-            style={[styles.submitButton, { backgroundColor: '#00ff88' }]}
+            style={styles.trackButton}
             onPress={handleTrack}
             disabled={loading}
           >
             {loading ? (
               <ActivityIndicator color="#0a0a0a" />
             ) : (
-              <Text style={[styles.submitButtonText, { color: '#0a0a0a' }]}>TRACK REPORT</Text>
+              <Text style={styles.trackButtonText}>TRACK REPORT</Text>
             )}
           </TouchableOpacity>
         </View>
@@ -94,61 +77,59 @@ export default function TrackReportScreen({ navigation }) {
         {/* Result Section */}
         {incident && (
           <View style={styles.section}>
-            <View style={[styles.card, { backgroundColor: '#1a1a1a', borderRadius: 16, padding: 20 }]}>
+            <View style={styles.resultCard}>
               {/* Status Badge */}
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                <Text style={{ color: '#00ff88', fontSize: 18, fontWeight: 'bold', letterSpacing: 2 }}>
-                  #{incident.tracking_id}
-                </Text>
-                <View style={[styles.severityBadge, { backgroundColor: STATUS_COLORS[incident.status] || '#666', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6 }]}>
-                  <Text style={{ color: '#fff', fontSize: 11, fontWeight: 'bold' }}>
-                    {(incident.status || 'unknown').toUpperCase().replace('_', ' ')}
+              <View style={styles.cardHeader}>
+                <Text style={styles.trackingIdText}>#{incident.tracking_id}</Text>
+                <View style={[styles.statusBadge, { backgroundColor: STATUS_COLORS[incident.status] || '#666' }]}>
+                  <Text style={styles.statusText}>
+                    {STATUS_LABELS[incident.status] || incident.status || 'UNKNOWN'}
                   </Text>
                 </View>
               </View>
 
               {/* Divider */}
-              <View style={{ height: 1, backgroundColor: '#333', marginBottom: 16 }} />
+              <View style={styles.divider} />
 
               {/* Details */}
-              <View style={{ gap: 14 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
-                  <Text style={{ fontSize: 24 }}>📍</Text>
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ color: '#444', fontSize: 10, fontWeight: 'bold', letterSpacing: 2 }}>LOCATION</Text>
-                    <Text style={{ color: '#fff', fontSize: 14, fontWeight: 'bold', marginTop: 2 }}>
+              <View>
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailIcon}>📍</Text>
+                  <View style={styles.detailContent}>
+                    <Text style={styles.detailLabel}>LOCATION</Text>
+                    <Text style={styles.detailValue}>
                       {incident.address || 'Location recorded'}
                     </Text>
                   </View>
                 </View>
 
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
-                  <Text style={{ fontSize: 24 }}>⚠️</Text>
-                  <View>
-                    <Text style={{ color: '#444', fontSize: 10, fontWeight: 'bold', letterSpacing: 2 }}>SEVERITY</Text>
-                    <Text style={{ color: '#fff', fontSize: 14, fontWeight: 'bold', marginTop: 2 }}>
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailIcon}>⚠️</Text>
+                  <View style={styles.detailContent}>
+                    <Text style={styles.detailLabel}>SEVERITY</Text>
+                    <Text style={styles.detailValue}>
                       {(incident.severity || 'unknown').toUpperCase()}
                     </Text>
                   </View>
                 </View>
 
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
-                  <Text style={{ fontSize: 24 }}>🕐</Text>
-                  <View>
-                    <Text style={{ color: '#444', fontSize: 10, fontWeight: 'bold', letterSpacing: 2 }}>REPORTED</Text>
-                    <Text style={{ color: '#fff', fontSize: 14, fontWeight: 'bold', marginTop: 2 }}>
-                      {new Date(incident.created_at).toLocaleString()}
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailIcon}>🕐</Text>
+                  <View style={styles.detailContent}>
+                    <Text style={styles.detailLabel}>REPORTED</Text>
+                    <Text style={styles.detailValue}>
+                      {formatDate(incident.created_at)}
                     </Text>
                   </View>
                 </View>
 
                 {incident.updated_at && incident.updated_at !== incident.created_at && (
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
-                    <Text style={{ fontSize: 24 }}>🔄</Text>
-                    <View>
-                      <Text style={{ color: '#444', fontSize: 10, fontWeight: 'bold', letterSpacing: 2 }}>LAST UPDATED</Text>
-                      <Text style={{ color: '#fff', fontSize: 14, fontWeight: 'bold', marginTop: 2 }}>
-                        {new Date(incident.updated_at).toLocaleString()}
+                  <View style={styles.detailRow}>
+                    <Text style={styles.detailIcon}>🔄</Text>
+                    <View style={styles.detailContent}>
+                      <Text style={styles.detailLabel}>LAST UPDATED</Text>
+                      <Text style={styles.detailValue}>
+                        {formatDate(incident.updated_at)}
                       </Text>
                     </View>
                   </View>
@@ -157,8 +138,8 @@ export default function TrackReportScreen({ navigation }) {
             </View>
 
             {/* Status Info */}
-            <View style={{ marginTop: 16, padding: 16, backgroundColor: '#141414', borderRadius: 12 }}>
-              <Text style={{ color: '#666', fontSize: 12, textAlign: 'center' }}>
+            <View style={styles.statusInfo}>
+              <Text style={styles.statusInfoText}>
                 {incident.status === 'pending_review' && '⏳ Your report is being reviewed by dispatchers.'}
                 {incident.status === 'acknowledged' && '✅ Your report has been acknowledged and is being addressed.'}
                 {incident.status === 'en_route' && '🚨 Responders are on their way.'}
@@ -172,10 +153,10 @@ export default function TrackReportScreen({ navigation }) {
 
         {/* Back to Login */}
         <TouchableOpacity
-          style={[styles.homeBtn, { marginTop: 'auto' }]}
+          style={styles.homeButton}
           onPress={() => navigation.replace('Login')}
         >
-          <Text style={styles.homeBtnText}>BACK TO LOGIN</Text>
+          <Text style={styles.homeButtonText}>BACK TO LOGIN</Text>
         </TouchableOpacity>
       </View>
     </SafeAreaView>

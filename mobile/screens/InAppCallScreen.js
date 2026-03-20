@@ -9,6 +9,8 @@ import {
   View, Text, TouchableOpacity, StyleSheet, Alert
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useAuth } from '../src/context/AuthContext';
+import { formatDuration } from '../src/utils/time';
 import {
   getCallSession,
   subscribeToCallUpdates,
@@ -18,7 +20,8 @@ import {
 import { InAppCallConnection, configureAudioMode } from '../lib/callProviders/inAppProvider';
 
 export default function InAppCallScreen({ route, navigation }) {
-  const { callSessionId, user, token, isCaller, connection: existingConnection } = route.params;
+  const { callSessionId, isCaller, connection: existingConnection } = route.params;
+  const { user } = useAuth();
   
   const [callSession, setCallSession] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -201,11 +204,7 @@ export default function InAppCallScreen({ route, navigation }) {
     }
   };
 
-  const formatDuration = (seconds) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  };
+  // Duration is now formatted using formatDuration utility
 
   const getStatusText = () => {
     switch (callStatus) {

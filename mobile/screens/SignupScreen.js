@@ -4,8 +4,8 @@ import {
   StyleSheet, ActivityIndicator, Alert, ScrollView
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import axios from 'axios';
-import { API_URL } from '../lib/supabase';
+import { useAuth } from '../src/context/AuthContext';
+import { configService } from '../src/services/apiClient';
 
 export default function SignupScreen({ navigation }) {
   const [badgeNumber, setBadgeNumber] = useState('');
@@ -24,8 +24,8 @@ export default function SignupScreen({ navigation }) {
 
   const fetchAgencies = async () => {
     try {
-      const response = await axios.get(`${API_URL}/agencies`);
-      setAgencies(response.data.agencies);
+      const response = await configService.getAgencies();
+      setAgencies(response.agencies || []);
     } catch (error) {
       console.error('Failed to fetch agencies:', error);
     }
@@ -55,9 +55,10 @@ export default function SignupScreen({ navigation }) {
 
     setLoading(true);
     try {
-      const response = await axios.post(`${API_URL}/auth/signup`, {
-        email: email,
-        password: password,
+      const { authService } = require('../src/services/apiClient');
+      const response = await authService.signup({
+        email,
+        password,
         full_name: fullName,
         badge_number: badgeNumber || null,
         agency_id: selectedAgency || null,
@@ -68,7 +69,7 @@ export default function SignupScreen({ navigation }) {
         { text: 'OK', onPress: () => navigation.replace('Login') }
       ]);
     } catch (error) {
-      const message = error.response?.data?.error || 'Failed to create account';
+      const message = error?.response?.data?.error || error?.message || 'Failed to create account';
       Alert.alert('Signup Failed', message);
     } finally {
       setLoading(false);

@@ -4,22 +4,17 @@ import {
   Alert, ScrollView, Linking, Modal
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import axios from 'axios';
-import { API_URL } from '../lib/supabase';
-import { styles } from './styles/QuickReportScreenStyles';
+import { styles } from './styles/IncidentDetailScreenStyles';
 
-import { STATUS_COLORS, STATUS_ICONS } from '../constants';
-import { createCallSession, getActiveCallForIncident, CALL_MODE, CALL_STATUS } from '../lib/callSessionService';
-
-const SEVERITY_COLORS = {
-  critical: '#FF0000',
-  high: '#FF6600',
-  medium: '#FFAA00',
-  low: '#00CC44'
-};
+import { useAuth } from '../src/context/AuthContext';
+import { incidentService, callService } from '../src/services/apiClient';
+import { STATUS_COLORS, STATUS_ICONS, SEVERITY_COLORS } from '../constants';
+import { getActiveCallForIncident, CALL_MODE, CALL_STATUS } from '../lib/callSessionService';
+import { formatDate } from '../src/utils/time';
 
 export default function IncidentDetailScreen({ route, navigation }) {
-  const { token, incidentId, user } = route.params;
+  const { incidentId } = route.params;
+  const { user } = useAuth();
   const [incident, setIncident] = useState(null);
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
@@ -35,10 +30,10 @@ export default function IncidentDetailScreen({ route, navigation }) {
 
   const fetchIncident = async () => {
     try {
-      const response = await axios.get(`${API_URL}/incidents/${incidentId}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      setIncident(response.data.incident);
+      const response = await incidentService.get(incidentId);
+      // Backend returns { data: { incident: {...} } }
+      const incidentData = response?.data?.incident || response?.data || response;
+      setIncident(incidentData);
       
       // Check for active call
       const { callSession } = await getActiveCallForIncident(incidentId);
@@ -55,10 +50,7 @@ export default function IncidentDetailScreen({ route, navigation }) {
   const updateStatus = async (newStatus) => {
     setUpdating(true);
     try {
-      await axios.patch(`${API_URL}/incidents/${incidentId}`, 
-        { status: newStatus },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      await incidentService.updateStatus(incidentId, newStatus);
       setIncident({ ...incident, status: newStatus });
       Alert.alert('Success', `Status updated to ${newStatus.replace('_', ' ')}`);
     } catch (error) {
@@ -83,8 +75,8 @@ export default function IncidentDetailScreen({ route, navigation }) {
     setStartingCall(true);
     
     try {
-      // Create call session in Supabase
-      const result = await createCallSession(
+      // Create call session via API (bypasses RLS)
+      const response = await callService.createSession(
         incident.id,
         incident.reporter_id,
         mode,
@@ -92,28 +84,26 @@ export default function IncidentDetailScreen({ route, navigation }) {
         incident.reporter_name || 'Reporter'
       );
       
-      if (result.success) {
+      const callSession = response?.data?.callSession;
+      
+      if (callSession) {
         // Navigate to appropriate call screen
         if (mode === CALL_MODE.JITSI) {
           navigation.navigate('VerificationCall', {
-            token,
             incidentId: incident.id,
-            user,
-            callSessionId: result.callSession.id,
+            callSessionId: callSession.id,
             callerName: user?.full_name || 'Admin',
             reporterName: incident.reporter_name || 'Reporter'
           });
         } else if (mode === CALL_MODE.IN_APP) {
           navigation.navigate('InAppCall', {
-            token,
             incidentId: incident.id,
-            user,
-            callSessionId: result.callSession.id,
+            callSessionId: callSession.id,
             isCaller: true,
           });
         }
       } else {
-        Alert.alert('Error', result.error || 'Failed to start call');
+        Alert.alert('Error', response?.error || 'Failed to start call');
       }
     } catch (error) {
       console.error('Failed to start call:', error);
@@ -129,18 +119,14 @@ export default function IncidentDetailScreen({ route, navigation }) {
     
     if (activeCall.call_mode === CALL_MODE.JITSI) {
       navigation.navigate('VerificationCall', {
-        token,
         incidentId: incident.id,
-        user,
         callSessionId: activeCall.id,
         callerName: user?.full_name || 'Admin',
         reporterName: incident.reporter_name || 'Reporter'
       });
     } else {
       navigation.navigate('InAppCall', {
-        token,
         incidentId: incident.id,
-        user,
         callSessionId: activeCall.id,
         isCaller: true,
       });
@@ -150,7 +136,7 @@ export default function IncidentDetailScreen({ route, navigation }) {
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
-        <ActivityIndicator color="#00ff88" size="large" style={{ marginTop: 100 }} />
+        <ActivityIndicator color="#00ff88" size="large" style={styles.loadingIndicator} />
       </SafeAreaView>
     );
   }
@@ -172,21 +158,21 @@ export default function IncidentDetailScreen({ route, navigation }) {
         </View>
 
         {/* Status Badge */}
-        <View style={[styles.card, { backgroundColor: '#1a1a1a', borderRadius: 16, padding: 20, marginBottom: 16 }]}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-              <Text style={{ fontSize: 32 }}>{incident.incident_icon || '⚠️'}</Text>
+        <View style={[styles.card, styles.cardPrimary]}>
+          <View style={styles.cardHeaderRow}>
+            <View style={styles.cardHeaderLeft}>
+              <Text style={styles.incidentIcon}>{incident.incident_icon || '⚠️'}</Text>
               <View>
-                <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>
+                <Text style={styles.incidentTypeText}>
                   {(incident.incident_type || 'Unknown').toUpperCase()}
                 </Text>
-                <Text style={{ color: '#666', fontSize: 12 }}>
+                <Text style={styles.incidentIdText}>
                   #{incident.id?.slice(0, 8).toUpperCase()}
                 </Text>
               </View>
             </View>
-            <View style={[styles.severityBadge, { backgroundColor: STATUS_COLORS[incident.status] || '#666', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8 }]}>
-              <Text style={{ color: '#fff', fontSize: 11, fontWeight: 'bold' }}>
+            <View style={[styles.statusBadge, { backgroundColor: STATUS_COLORS[incident.status] || '#666' }]}>
+              <Text style={styles.statusText}>
                 {(incident.status || 'unknown').toUpperCase().replace('_', ' ')}
               </Text>
             </View>
@@ -194,11 +180,11 @@ export default function IncidentDetailScreen({ route, navigation }) {
         </View>
 
         {/* Severity */}
-        <View style={[styles.card, { backgroundColor: '#1a1a1a', borderRadius: 12, padding: 16, marginBottom: 12 }]}>
-          <Text style={{ color: '#444', fontSize: 10, fontWeight: 'bold', letterSpacing: 2, marginBottom: 8 }}>SEVERITY</Text>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-            <View style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: SEVERITY_COLORS[incident.severity] || '#666' }} />
-            <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold' }}>
+        <View style={[styles.card, styles.cardSecondary]}>
+          <Text style={styles.label}>SEVERITY</Text>
+          <View style={styles.severityRow}>
+            <View style={[styles.severityDot, { backgroundColor: SEVERITY_COLORS[incident.severity] || '#666' }]} />
+            <Text style={styles.severityText}>
               {(incident.severity || 'unknown').toUpperCase()}
             </Text>
           </View>
@@ -206,55 +192,55 @@ export default function IncidentDetailScreen({ route, navigation }) {
 
         {/* Location */}
         <TouchableOpacity 
-          style={[styles.card, { backgroundColor: '#1a1a1a', borderRadius: 12, padding: 16, marginBottom: 12 }]}
+          style={[styles.card, styles.cardSecondary]}
           onPress={openMap}
         >
-          <Text style={{ color: '#444', fontSize: 10, fontWeight: 'bold', letterSpacing: 2, marginBottom: 8 }}>LOCATION</Text>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-            <Text style={{ fontSize: 24 }}>📍</Text>
-            <View style={{ flex: 1 }}>
-              <Text style={{ color: '#fff', fontSize: 14, fontWeight: 'bold' }}>
+          <Text style={styles.label}>LOCATION</Text>
+          <View style={styles.locationRow}>
+            <Text style={styles.locationIcon}>📍</Text>
+            <View style={styles.locationContent}>
+              <Text style={styles.locationAddress}>
                 {incident.address || 'No address recorded'}
               </Text>
               {incident.latitude && incident.longitude && (
-                <Text style={{ color: '#666', fontSize: 11, marginTop: 4 }}>
+                <Text style={styles.locationCoords}>
                   {incident.latitude.toFixed(6)}, {incident.longitude.toFixed(6)}
                 </Text>
               )}
             </View>
-            <Text style={{ color: '#00ff88', fontSize: 12 }}>OPEN MAP →</Text>
+            <Text style={styles.locationLink}>OPEN MAP →</Text>
           </View>
         </TouchableOpacity>
 
         {/* Description */}
         {incident.description && (
-          <View style={[styles.card, { backgroundColor: '#1a1a1a', borderRadius: 12, padding: 16, marginBottom: 12 }]}>
-            <Text style={{ color: '#444', fontSize: 10, fontWeight: 'bold', letterSpacing: 2, marginBottom: 8 }}>DESCRIPTION</Text>
-            <Text style={{ color: '#fff', fontSize: 14, lineHeight: 22 }}>
+          <View style={[styles.card, styles.cardSecondary]}>
+            <Text style={styles.label}>DESCRIPTION</Text>
+            <Text style={styles.descriptionText}>
               {incident.description}
             </Text>
           </View>
         )}
 
         {/* Timestamps */}
-        <View style={[styles.card, { backgroundColor: '#1a1a1a', borderRadius: 12, padding: 16, marginBottom: 12 }]}>
-          <View style={{ gap: 16 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-              <Text style={{ fontSize: 20 }}>🕐</Text>
+        <View style={[styles.card, styles.cardSecondary]}>
+          <View style={styles.timestampContainer}>
+            <View style={styles.timestampRow}>
+              <Text style={styles.timestampIcon}>🕐</Text>
               <View>
-                <Text style={{ color: '#444', fontSize: 10, fontWeight: 'bold', letterSpacing: 2 }}>REPORTED</Text>
-                <Text style={{ color: '#fff', fontSize: 14, fontWeight: 'bold' }}>
-                  {new Date(incident.created_at).toLocaleString()}
+                <Text style={styles.timestampLabel}>REPORTED</Text>
+                <Text style={styles.timestampValue}>
+                  {formatDate(incident.created_at)}
                 </Text>
               </View>
             </View>
             {incident.updated_at && incident.updated_at !== incident.created_at && (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                <Text style={{ fontSize: 20 }}>🔄</Text>
+              <View style={styles.timestampRow}>
+                <Text style={styles.timestampIcon}>🔄</Text>
                 <View>
-                  <Text style={{ color: '#444', fontSize: 10, fontWeight: 'bold', letterSpacing: 2 }}>LAST UPDATED</Text>
-                  <Text style={{ color: '#fff', fontSize: 14, fontWeight: 'bold' }}>
-                    {new Date(incident.updated_at).toLocaleString()}
+                  <Text style={styles.timestampLabel}>LAST UPDATED</Text>
+                  <Text style={styles.timestampValue}>
+                    {formatDate(incident.updated_at)}
                   </Text>
                 </View>
               </View>
@@ -264,37 +250,36 @@ export default function IncidentDetailScreen({ route, navigation }) {
 
         {/* Reporter Contact (if anonymous) */}
         {incident.extra_fields?.reporter_contact && (
-          <View style={[styles.card, { backgroundColor: '#1a1a1a', borderRadius: 12, padding: 16, marginBottom: 12 }]}>
-            <Text style={{ color: '#444', fontSize: 10, fontWeight: 'bold', letterSpacing: 2, marginBottom: 8 }}>REPORTER CONTACT</Text>
-            <Text style={{ color: '#fff', fontSize: 14 }}>{incident.extra_fields.reporter_contact}</Text>
+          <View style={[styles.card, styles.cardSecondary]}>
+            <Text style={styles.label}>REPORTER CONTACT</Text>
+            <Text style={styles.contactText}>{incident.extra_fields.reporter_contact}</Text>
           </View>
         )}
 
         {/* Status Actions - Only for non-citizens */}
         {!isCitizen && (
-          <View style={[styles.card, { backgroundColor: '#141414', borderRadius: 12, padding: 16, marginBottom: 20 }]}>
-            <Text style={{ color: '#444', fontSize: 10, fontWeight: 'bold', letterSpacing: 2, marginBottom: 12 }}>UPDATE STATUS</Text>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+          <View style={[styles.card, styles.cardDark]}>
+            <Text style={styles.labelLarge}>UPDATE STATUS</Text>
+            <View style={styles.statusButtonContainer}>
               {['pending_review', 'acknowledged', 'en_route', 'on_scene', 'resolved', 'closed'].map(status => (
                 <TouchableOpacity
                   key={status}
-                  style={{
-                    backgroundColor: incident.status === status ? STATUS_COLORS[status] : '#1a1a1a',
-                    borderWidth: 1,
-                    borderColor: STATUS_COLORS[status] || '#333',
-                    borderRadius: 8,
-                    paddingHorizontal: 16,
-                    paddingVertical: 10,
-                    opacity: updating ? 0.5 : 1
-                  }}
+                  style={[
+                    styles.statusButton,
+                    incident.status === status && styles.statusButtonActive,
+                    {
+                      backgroundColor: incident.status === status ? STATUS_COLORS[status] : '#1a1a1a',
+                      borderColor: STATUS_COLORS[status] || '#333',
+                      opacity: updating ? 0.5 : 1
+                    }
+                  ]}
                   onPress={() => updateStatus(status)}
                   disabled={updating || incident.status === status}
                 >
-                  <Text style={{ 
-                    color: incident.status === status ? '#fff' : STATUS_COLORS[status], 
-                    fontSize: 11, 
-                    fontWeight: 'bold' 
-                  }}>
+                  <Text style={[
+                    styles.statusButtonText,
+                    { color: incident.status === status ? '#fff' : STATUS_COLORS[status] }
+                  ]}>
                     {status.toUpperCase().replace('_', ' ')}
                   </Text>
                 </TouchableOpacity>
@@ -309,39 +294,39 @@ export default function IncidentDetailScreen({ route, navigation }) {
             {/* Active Call Banner */}
             {activeCall && (
               <TouchableOpacity
-                style={[styles.card, { backgroundColor: '#0a2a2a', borderRadius: 12, padding: 16, marginBottom: 12, flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderColor: '#00ff88' }]}
+                style={[styles.card, styles.callBannerActive]}
                 onPress={handleJoinExistingCall}
               >
-                <Text style={{ fontSize: 32 }}>📞</Text>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ color: '#00ff88', fontSize: 14, fontWeight: 'bold' }}>
+                <Text style={styles.callIcon}>📞</Text>
+                <View style={styles.callContent}>
+                  <Text style={styles.callTitle}>
                     {activeCall.status === CALL_STATUS.RINGING ? 'CALL RINGING...' : 'ACTIVE CALL'}
                   </Text>
-                  <Text style={{ color: '#888', fontSize: 11, marginTop: 4 }}>
+                  <Text style={styles.callSubtext}>
                     {activeCall.call_mode === CALL_MODE.JITSI ? 'Jitsi Browser Call' : 'In-App Call'} • Tap to join
                   </Text>
                 </View>
-                <Text style={{ color: '#00ff88', fontSize: 12 }}>JOIN →</Text>
+                <Text style={styles.callLink}>JOIN →</Text>
               </TouchableOpacity>
             )}
             
             {/* Start Call Button */}
             {!activeCall && (
               <TouchableOpacity
-                style={[styles.card, { backgroundColor: '#0a2a1a', borderRadius: 12, padding: 16, marginBottom: 20, flexDirection: 'row', alignItems: 'center', gap: 12 }]}
+                style={[styles.card, styles.callBannerStart]}
                 onPress={() => setShowCallModeModal(true)}
                 disabled={startingCall}
               >
-                <Text style={{ fontSize: 32 }}>📞</Text>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ color: '#00ff88', fontSize: 14, fontWeight: 'bold' }}>
+                <Text style={styles.callIcon}>📞</Text>
+                <View style={styles.callContent}>
+                  <Text style={styles.callTitle}>
                     {startingCall ? 'STARTING CALL...' : 'START VERIFICATION CALL'}
                   </Text>
-                  <Text style={{ color: '#666', fontSize: 11, marginTop: 4 }}>
+                  <Text style={styles.callSubtextDark}>
                     Choose call mode: Jitsi or In-App
                   </Text>
                 </View>
-                <Text style={{ color: '#00ff88', fontSize: 12 }}>→</Text>
+                <Text style={styles.callLink}>→</Text>
               </TouchableOpacity>
             )}
           </View>
@@ -354,47 +339,47 @@ export default function IncidentDetailScreen({ route, navigation }) {
           animationType="slide"
           onRequestClose={() => setShowCallModeModal(false)}
         >
-          <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'flex-end' }}>
-            <View style={{ backgroundColor: '#1a1a1a', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, paddingBottom: 40 }}>
-              <Text style={{ color: '#fff', fontSize: 20, fontWeight: 'bold', marginBottom: 8 }}>Choose Call Mode</Text>
-              <Text style={{ color: '#888', fontSize: 14, marginBottom: 24 }}>Select how you want to call the reporter</Text>
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>Choose Call Mode</Text>
+              <Text style={styles.modalSubtitle}>Select how you want to call the reporter</Text>
               
               {/* Jitsi Option */}
               <TouchableOpacity
-                style={{ backgroundColor: '#0a2a1a', borderRadius: 16, padding: 20, marginBottom: 12, flexDirection: 'row', alignItems: 'center', gap: 16 }}
+                style={[styles.callModeOption, styles.callModeOptionJitsi]}
                 onPress={() => handleStartCall(CALL_MODE.JITSI)}
               >
-                <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: '#1a3a2a', justifyContent: 'center', alignItems: 'center' }}>
-                  <Text style={{ fontSize: 24 }}>🌐</Text>
+                <View style={[styles.callModeIconWrapper, styles.callModeIconWrapperJitsi]}>
+                  <Text style={styles.callModeIcon}>🌐</Text>
                 </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ color: '#00ff88', fontSize: 16, fontWeight: 'bold' }}>Jitsi Browser Call</Text>
-                  <Text style={{ color: '#888', fontSize: 12, marginTop: 4 }}>Opens in browser • Free • No account needed</Text>
+                <View style={styles.callModeContent}>
+                  <Text style={[styles.callModeTitle, styles.callModeTitleJitsi]}>Jitsi Browser Call</Text>
+                  <Text style={styles.callModeDesc}>Opens in browser • Free • No account needed</Text>
                 </View>
-                <Text style={{ color: '#00ff88', fontSize: 16 }}>→</Text>
+                <Text style={[styles.callModeArrow, styles.callModeArrowJitsi]}>→</Text>
               </TouchableOpacity>
               
               {/* In-App Option */}
               <TouchableOpacity
-                style={{ backgroundColor: '#0a1a2a', borderRadius: 16, padding: 20, marginBottom: 12, flexDirection: 'row', alignItems: 'center', gap: 16 }}
+                style={[styles.callModeOption, styles.callModeOptionInApp]}
                 onPress={() => handleStartCall(CALL_MODE.IN_APP)}
               >
-                <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: '#1a2a3a', justifyContent: 'center', alignItems: 'center' }}>
-                  <Text style={{ fontSize: 24 }}>📱</Text>
+                <View style={[styles.callModeIconWrapper, styles.callModeIconWrapperInApp]}>
+                  <Text style={styles.callModeIcon}>📱</Text>
                 </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ color: '#00aaff', fontSize: 16, fontWeight: 'bold' }}>In-App Call</Text>
-                  <Text style={{ color: '#888', fontSize: 12, marginTop: 4 }}>Stays in app • Audio only • Simple UI</Text>
+                <View style={styles.callModeContent}>
+                  <Text style={[styles.callModeTitle, styles.callModeTitleInApp]}>In-App Call</Text>
+                  <Text style={styles.callModeDesc}>Stays in app • Audio only • Simple UI</Text>
                 </View>
-                <Text style={{ color: '#00aaff', fontSize: 16 }}>→</Text>
+                <Text style={[styles.callModeArrow, styles.callModeArrowInApp]}>→</Text>
               </TouchableOpacity>
               
               {/* Cancel Button */}
               <TouchableOpacity
-                style={{ backgroundColor: '#2a2a2a', borderRadius: 12, padding: 16, alignItems: 'center', marginTop: 8 }}
+                style={styles.cancelButton}
                 onPress={() => setShowCallModeModal(false)}
               >
-                <Text style={{ color: '#888', fontSize: 14, fontWeight: 'bold' }}>Cancel</Text>
+                <Text style={styles.cancelButtonText}>Cancel</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -402,14 +387,14 @@ export default function IncidentDetailScreen({ route, navigation }) {
         
         {/* Citizen Status Info */}
         {isCitizen && (
-          <View style={[styles.card, { backgroundColor: '#141414', borderRadius: 12, padding: 16, marginBottom: 20 }]}>
-            <Text style={{ color: '#444', fontSize: 10, fontWeight: 'bold', letterSpacing: 2, marginBottom: 12 }}>REPORT STATUS</Text>
-            <View style={{ alignItems: 'center', gap: 12 }}>
-              <Text style={{ fontSize: 48 }}>{STATUS_ICONS[incident.status] || '📋'}</Text>
-              <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>
+          <View style={[styles.card, styles.cardDark]}>
+            <Text style={styles.labelLarge}>REPORT STATUS</Text>
+            <View style={styles.citizenStatusContainer}>
+              <Text style={styles.citizenStatusIcon}>{STATUS_ICONS[incident.status] || '📋'}</Text>
+              <Text style={styles.citizenStatusText}>
                 {(incident.status || 'unknown').toUpperCase().replace('_', ' ')}
               </Text>
-              <Text style={{ color: '#666', fontSize: 12, textAlign: 'center' }}>
+              <Text style={styles.citizenStatusDesc}>
                 {incident.status === 'pending_review' && 'Your report is being reviewed by responders'}
                 {incident.status === 'acknowledged' && 'Responders have acknowledged your report'}
                 {incident.status === 'en_route' && 'Help is on the way!'}

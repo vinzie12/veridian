@@ -31,13 +31,11 @@ const RINGING_TIMEOUT_MS = 60 * 1000;
 // CREATE CALL SESSION
 // ============================================
 
-export const createCallSession = async (incidentId, calleeId, callMode, callerName, calleeName) => {
+export const createCallSession = async (incidentId, calleeId, callMode, callerName, calleeName, callerId) => {
   try {
-    // Get current user
-    const { data: { user } } = await supabase.auth.getUser();
-    
-    if (!user) {
-      throw new Error('User not authenticated');
+    // Use provided callerId (from auth context) since we use custom JWT auth, not Supabase Auth
+    if (!callerId) {
+      throw new Error('Caller ID is required');
     }
     
     // Generate unique room name
@@ -53,7 +51,7 @@ export const createCallSession = async (incidentId, calleeId, callMode, callerNa
       .from('call_sessions')
       .insert({
         incident_id: incidentId,
-        caller_id: user.id,
+        caller_id: callerId,
         callee_id: calleeId,
         call_mode: callMode,
         status: CALL_STATUS.RINGING,

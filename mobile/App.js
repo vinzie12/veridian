@@ -1,19 +1,19 @@
-import { useEffect, useRef, useState } from 'react';
-import { NavigationContainer } from '@react-navigation/native';
-import { createStackNavigator } from '@react-navigation/stack';
-import LoginScreen from './screens/LoginScreen';
-import SignupScreen from './screens/SignupScreen';
-import HomeScreen from './screens/HomeScreen';
-import CitizenHomeScreen from './screens/CitizenHomeScreen';
-import QuickReportScreen from './screens/QuickReportScreen';
-import ConfirmationScreen from './screens/ConfirmationScreen';
-import TrackReportScreen from './screens/TrackReportScreen';
-import IncidentDetailScreen from './screens/IncidentDetailScreen';
-import SettingsScreen from './screens/SettingsScreen';
-import VerificationCallScreen from './screens/VerificationCallScreen';
-import IncomingCallScreen from './screens/IncomingCallScreen';
-import InAppCallScreen from './screens/InAppCallScreen';
-import { loadSupabaseConfig, supabase } from './lib/supabase';
+/**
+ * Main App Entry Point
+ * Initializes app with proper architecture
+ */
+
+import React, { useEffect, useState, useRef } from 'react';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+
+import { AuthProvider, useAuth } from './src/context/AuthContext';
+import { RootNavigator, setNavigationRef } from './src/navigation';
+import { FullScreenLoading } from './src/components/common';
+import { configService, setApiBaseUrl, getApiBaseUrl } from './src/services/apiClient';
+
+// Import existing services
+import { loadSupabaseConfig, supabase, clearStaleTokens } from './lib/supabase';
 import { subscribeToIncomingCalls } from './lib/callSessionService';
 import { 
   registerForPushNotifications, 
@@ -21,135 +21,139 @@ import {
   removeNotificationListeners 
 } from './lib/notificationService';
 
-const Stack = createStackNavigator();
-
 export default function App() {
   const [isReady, setIsReady] = useState(false);
-  const [user, setUser] = useState(null);
-  const navigationRef = useRef(null);
-  const incomingCallSubscription = useRef(null);
-  const notificationSubscriptions = useRef(null);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     initializeApp();
-    
-    return () => {
-      // Cleanup subscriptions on unmount
-      if (incomingCallSubscription.current) {
-        incomingCallSubscription.current.unsubscribe();
-      }
-      if (notificationSubscriptions.current) {
-        removeNotificationListeners(notificationSubscriptions.current);
-      }
-    };
   }, []);
-
-  useEffect(() => {
-    // Subscribe to incoming calls when user is set
-    if (user?.id && navigationRef.current) {
-      setupIncomingCallListener();
-      setupNotifications();
-    }
-    
-    return () => {
-      if (incomingCallSubscription.current) {
-        incomingCallSubscription.current.unsubscribe();
-      }
-      if (notificationSubscriptions.current) {
-        removeNotificationListeners(notificationSubscriptions.current);
-      }
-    };
-  }, [user?.id]);
 
   const initializeApp = async () => {
     try {
-      // Load Supabase config from backend
-      await loadSupabaseConfig();
+      console.log('[App] Initializing...');
+
+      // Load config from backend (sets API URL internally)
+      // This also clears stale tokens before creating Supabase client
+      const configLoaded = await loadSupabaseConfig();
       
-      // Get current user
-      const { data: { user: currentUser } } = await supabase.auth.getUser();
-      setUser(currentUser);
-      
-      // Listen for auth changes
-      supabase.auth.onAuthStateChange((event, session) => {
-        setUser(session?.user || null);
-      });
+      if (!configLoaded) {
+        throw new Error('Failed to load configuration from server');
+      }
+
+      console.log('[App] Config loaded, API URL:', getApiBaseUrl());
+      console.log('[App] Initialized successfully');
       
       setIsReady(true);
-    } catch (error) {
-      console.error('Failed to initialize app:', error);
+    } catch (err) {
+      console.error('[App] Initialization failed:', err);
+      setError(err.message);
       setIsReady(true);
     }
   };
 
-  const setupIncomingCallListener = () => {
-    if (!user?.id) return;
-    
-    incomingCallSubscription.current = subscribeToIncomingCalls(
-      user.id,
-      (callSession) => {
-        console.log('Incoming call received:', callSession);
-        navigateToIncomingCall(callSession);
-      }
-    );
-  };
-
-  const setupNotifications = async () => {
-    if (!user?.id) return;
-    
-    // Register for push notifications
-    await registerForPushNotifications(user.id);
-    
-    // Set up notification listeners
-    notificationSubscriptions.current = setupNotificationListeners(
-      // On notification received (foreground)
-      (notification) => {
-        const data = notification.request.content.data;
-        if (data?.type === 'incoming_call') {
-          // Call session will be received via realtime subscription
-          console.log('Call notification received');
-        }
-      },
-      // On notification response (tap)
-      (response) => {
-        const data = response.notification.request.content.data;
-        if (data?.type === 'incoming_call' && data?.callSessionId) {
-          // Navigate to incoming call screen
-          navigateToIncomingCall({ id: data.callSessionId });
-        }
-      }
-    );
-  };
-
-  const navigateToIncomingCall = (callSession) => {
-    if (navigationRef.current) {
-      navigationRef.current.navigate('IncomingCall', {
-        callSessionId: callSession.id,
-        user,
-      });
-    }
-  };
-
+  // Show loading screen during initialization
   if (!isReady) {
-    return null;
+    return <FullScreenLoading message="Starting Veridian..." />;
+  }
+
+  // Show error if initialization failed
+  if (error) {
+    return (
+      <SafeAreaProvider>
+        <FullScreenLoading message={`Error: ${error}`} />
+      </SafeAreaProvider>
+    );
   }
 
   return (
-    <NavigationContainer ref={navigationRef}>
-      <Stack.Navigator initialRouteName="Login">
-        <Stack.Screen name="Login" component={LoginScreen} options={{ headerShown: false }} />
-        <Stack.Screen name="Signup" component={SignupScreen} options={{ headerShown: false }} />
-        <Stack.Screen name="Home" component={HomeScreen} options={{ headerShown: false }} />
-        <Stack.Screen name="CitizenHome" component={CitizenHomeScreen} options={{ headerShown: false }} />
-        <Stack.Screen name="QuickReport" component={QuickReportScreen} options={{ headerShown: false }} />
-        <Stack.Screen name="Confirmation" component={ConfirmationScreen} options={{ headerShown: false }} />
-        <Stack.Screen name="TrackReport" component={TrackReportScreen} options={{ headerShown: false }} />
-        <Stack.Screen name="IncidentDetail" component={IncidentDetailScreen} options={{ headerShown: false }} />
-        <Stack.Screen name="Settings" component={SettingsScreen} options={{ headerShown: false }} />
-        <Stack.Screen name="VerificationCall" component={VerificationCallScreen} options={{ headerShown: false }} />
-        <Stack.Screen name="IncomingCall" component={IncomingCallScreen} options={{ headerShown: false }} />
-        <Stack.Screen name="InAppCall" component={InAppCallScreen} options={{ headerShown: false }} />
-      </Stack.Navigator>
-    </NavigationContainer>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <AuthProvider>
+          <AppContent />
+        </AuthProvider>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
+  );
+}
+
+/**
+ * App Content - sets up realtime subscriptions after auth
+ */
+function AppContent() {
+  const { user } = useAuth();
+  const incomingCallSubscription = useRef(null);
+  const notificationSubscriptions = useRef(null);
+  const navigationRef = useRef(null);
+
+  useEffect(() => {
+    if (user?.id && navigationRef.current) {
+      setupRealtimeSubscriptions();
+    }
+
+    return () => {
+      cleanupSubscriptions();
+    };
+  }, [user?.id]);
+
+  const setupRealtimeSubscriptions = async () => {
+    try {
+      // Incoming calls
+      incomingCallSubscription.current = subscribeToIncomingCalls(
+        user.id,
+        (callSession) => {
+          console.log('[App] Incoming call:', callSession);
+          if (navigationRef.current) {
+            navigationRef.current.navigate('IncomingCall', {
+              callSessionId: callSession.id,
+              user,
+            });
+          }
+        }
+      );
+
+      // Push notifications
+      await registerForPushNotifications(user.id);
+      
+      notificationSubscriptions.current = setupNotificationListeners(
+        (notification) => {
+          const data = notification.request.content.data;
+          if (data?.type === 'incoming_call') {
+            console.log('[App] Call notification received');
+          }
+        },
+        (response) => {
+          const data = response.notification.request.content.data;
+          if (data?.type === 'incoming_call' && data?.callSessionId) {
+            if (navigationRef.current) {
+              navigationRef.current.navigate('IncomingCall', {
+                callSessionId: data.callSessionId,
+                user,
+              });
+            }
+          }
+        }
+      );
+    } catch (err) {
+      console.error('[App] Failed to setup subscriptions:', err);
+    }
+  };
+
+  const cleanupSubscriptions = () => {
+    if (incomingCallSubscription.current) {
+      incomingCallSubscription.current.unsubscribe();
+    }
+    if (notificationSubscriptions.current) {
+      removeNotificationListeners(notificationSubscriptions.current);
+    }
+  };
+
+  return (
+    <RootNavigator
+      ref={(ref) => {
+        navigationRef.current = ref;
+        setNavigationRef(ref);
+      }}
+    />
   );
 }

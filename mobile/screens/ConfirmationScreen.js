@@ -2,16 +2,12 @@ import {
   View, Text, StyleSheet,
   TouchableOpacity, SafeAreaView, Alert
 } from 'react-native';
+import { useAuth } from '../src/context/AuthContext';
+import { SEVERITY_COLORS } from '../constants';
 
-const SEVERITY_COLORS = {
-  critical: '#FF0000',
-  high: '#FF6600',
-  medium: '#FFAA00',
-  low: '#00CC44'
-};
-
-export default function ConfirmationScreen({ route, navigation }) {
-  const { token, user, incident, isAnonymous } = route.params;
+const ConfirmationScreen = ({ route, navigation }) => {
+  const { user } = useAuth();
+  const { incident, isAnonymous } = route.params;
 
   // Determine which home screen to navigate to based on user role
   const homeScreen = user?.role === 'citizen' ? 'CitizenHome' : 'Home';
@@ -33,7 +29,7 @@ export default function ConfirmationScreen({ route, navigation }) {
         </Text>
 
         {/* Tracking ID for anonymous users and citizens */}
-        {(isAnonymous || user?.role === 'citizen') && incident.trackingId && (
+        {(isAnonymous || user?.role === 'citizen') && incident?.trackingId && (
           <View style={styles.trackingCard}>
             <Text style={styles.trackingLabel}>TRACKING ID</Text>
             <Text style={styles.trackingId}>{incident.trackingId}</Text>
@@ -45,14 +41,14 @@ export default function ConfirmationScreen({ route, navigation }) {
         <View style={styles.card}>
           <View style={styles.cardHeader}>
             <Text style={styles.incidentNumber}>
-              #{incident.id}
+              #{incident?.id || 'NEW'}
             </Text>
             <View style={[
               styles.severityBadge,
-              { backgroundColor: SEVERITY_COLORS[incident.severity] }
+              { backgroundColor: SEVERITY_COLORS[incident?.severity] || '#666' }
             ]}>
               <Text style={styles.severityText}>
-                {incident.severity.toUpperCase()}
+                {(incident?.severity || 'unknown').toUpperCase()}
               </Text>
             </View>
           </View>
@@ -61,12 +57,12 @@ export default function ConfirmationScreen({ route, navigation }) {
 
           <View style={styles.detailRow}>
             <Text style={styles.detailIcon}>
-              {incident.typeIcon || '⚠️'}
+              {incident?.typeIcon || '⚠️'}
             </Text>
             <View>
               <Text style={styles.detailLabel}>INCIDENT TYPE</Text>
               <Text style={styles.detailValue}>
-                {incident.typeName?.toUpperCase() || 'UNKNOWN'}
+                {incident?.typeName?.toUpperCase() || 'UNKNOWN'}
               </Text>
             </View>
           </View>
@@ -75,7 +71,7 @@ export default function ConfirmationScreen({ route, navigation }) {
             <Text style={styles.detailIcon}>📍</Text>
             <View style={styles.detailFlex}>
               <Text style={styles.detailLabel}>LOCATION</Text>
-              <Text style={styles.detailValue}>{incident.address}</Text>
+              <Text style={styles.detailValue}>{incident?.address || 'Location recorded'}</Text>
             </View>
           </View>
 
@@ -83,7 +79,7 @@ export default function ConfirmationScreen({ route, navigation }) {
             <Text style={styles.detailIcon}>🕐</Text>
             <View>
               <Text style={styles.detailLabel}>TIME REPORTED</Text>
-              <Text style={styles.detailValue}>{incident.time}</Text>
+              <Text style={styles.detailValue}>{incident?.time || 'Just now'}</Text>
             </View>
           </View>
         </View>
@@ -109,14 +105,14 @@ export default function ConfirmationScreen({ route, navigation }) {
           <>
             <TouchableOpacity
               style={styles.addDetailsBtn}
-              onPress={() => navigation.replace(homeScreen, { token, user })}
+              onPress={() => navigation.replace(homeScreen)}
             >
               <Text style={styles.addDetailsText}>VIEW MY REPORTS</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               style={styles.homeBtn}
-              onPress={() => navigation.replace(homeScreen, { token, user })}
+              onPress={() => navigation.replace(homeScreen)}
             >
               <Text style={styles.homeBtnText}>BACK TO HOME</Text>
             </TouchableOpacity>
@@ -240,3 +236,5 @@ const styles = StyleSheet.create({
     letterSpacing: 2,
   },
 });
+
+export default ConfirmationScreen;

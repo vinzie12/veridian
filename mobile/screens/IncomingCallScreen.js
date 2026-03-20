@@ -9,6 +9,8 @@ import {
   View, Text, TouchableOpacity, StyleSheet, Animated, Easing, Alert
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useAuth } from '../src/context/AuthContext';
+import { formatTime } from '../src/utils/time';
 import {
   subscribeToCallUpdates,
   acceptCall,
@@ -20,7 +22,8 @@ import {
 } from '../lib/callSessionService';
 
 export default function IncomingCallScreen({ route, navigation }) {
-  const { callSessionId, user, token } = route.params;
+  const { callSessionId } = route.params;
+  const { user } = useAuth();
   
   const [callSession, setCallSession] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -195,8 +198,6 @@ export default function IncomingCallScreen({ route, navigation }) {
           // In-app call - navigate to InAppCallScreen
           navigation.replace('InAppCall', {
             callSessionId: session.id,
-            user,
-            token,
             isCaller: false,
             connection: result.connection,
           });
@@ -217,11 +218,7 @@ export default function IncomingCallScreen({ route, navigation }) {
     if (subscriptionRef.current) subscriptionRef.current.unsubscribe();
   };
 
-  const formatTime = (seconds) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
+  // Timer is now formatted using formatTime utility
 
   if (loading) {
     return (

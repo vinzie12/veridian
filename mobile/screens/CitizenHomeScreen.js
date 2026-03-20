@@ -5,16 +5,16 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
-import axios from 'axios';
 
-import { API_URL } from '../lib/supabase';
+import { useAuth } from '../src/context/AuthContext';
+import { incidentService } from '../src/services/apiClient';
 import { 
   STATUS_COLORS, STATUS_ICONS, INCIDENT_ICONS, 
   EMERGENCY_CONTACTS 
 } from '../constants';
 
-export default function CitizenHomeScreen({ route, navigation }) {
-  const { token, user } = route.params;
+export default function CitizenHomeScreen({ navigation }) {
+  const { user } = useAuth();
   const [myReports, setMyReports] = useState([]);
   const [nearbyIncidents, setNearbyIncidents] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -23,16 +23,12 @@ export default function CitizenHomeScreen({ route, navigation }) {
   const fetchData = async () => {
     try {
       // Fetch user's own reports
-      const myReportsRes = await axios.get(`${API_URL}/incidents?submitted_by=me`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      setMyReports(myReportsRes.data.incidents || []);
+      const myReportsRes = await incidentService.list({ reporter_id: 'me' });
+      setMyReports(myReportsRes?.data || []);
 
       // Fetch nearby active incidents
-      const nearbyRes = await axios.get(`${API_URL}/incidents?filter=active&limit=5`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      setNearbyIncidents(nearbyRes.data.incidents || []);
+      const nearbyRes = await incidentService.list({ status: 'active', limit: 5 });
+      setNearbyIncidents(nearbyRes?.data || []);
     } catch (error) {
       console.error('Failed to fetch data:', error);
     } finally {
@@ -56,14 +52,14 @@ export default function CitizenHomeScreen({ route, navigation }) {
   const renderMyReport = ({ item }) => (
     <TouchableOpacity 
       style={styles.reportCard}
-      onPress={() => navigation.navigate('IncidentDetail', { token, incidentId: item.id, user })}
+      onPress={() => navigation.navigate('IncidentDetail', { incidentId: item.id })}
       activeOpacity={0.7}
     >
       <View style={styles.reportLeft}>
         <Text style={styles.reportIcon}>{item.incident_icon || INCIDENT_ICONS[item.incident_type] || '⚠️'}</Text>
       </View>
       <View style={styles.reportMiddle}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <View style={styles.reportTypeRow}>
           <Text style={styles.reportType}>{(item.incident_type || 'unknown').toUpperCase()}</Text>
           <View style={[styles.statusBadge, { backgroundColor: STATUS_COLORS[item.status] || '#666' }]}>
             <Text style={styles.statusText}>{(item.status || 'unknown').toUpperCase().replace('_', ' ')}</Text>
@@ -129,7 +125,7 @@ export default function CitizenHomeScreen({ route, navigation }) {
           <Text style={styles.sectionTitle}>REPORT AN INCIDENT</Text>
           <TouchableOpacity
             style={styles.reportIncidentBtn}
-            onPress={() => navigation.navigate('QuickReport', { token, user })}
+            onPress={() => navigation.navigate('QuickReport')}
             activeOpacity={0.8}
           >
             <Text style={styles.reportIncidentText}>⚡ REPORT INCIDENT</Text>
@@ -140,7 +136,7 @@ export default function CitizenHomeScreen({ route, navigation }) {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>MY REPORTS</Text>
           {loading ? (
-            <ActivityIndicator color="#00ff88" size="large" style={{ marginTop: 20 }} />
+            <ActivityIndicator color="#00ff88" size="large" style={styles.loadingIndicator} />
           ) : myReports.length === 0 ? (
             <Text style={styles.emptyText}>No reports submitted yet</Text>
           ) : (
@@ -158,7 +154,7 @@ export default function CitizenHomeScreen({ route, navigation }) {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>NEARBY ACTIVITY</Text>
           {loading ? (
-            <ActivityIndicator color="#00ff88" size="large" style={{ marginTop: 20 }} />
+            <ActivityIndicator color="#00ff88" size="large" style={styles.loadingIndicator} />
           ) : nearbyIncidents.length === 0 ? (
             <Text style={styles.emptyText}>No nearby active incidents</Text>
           ) : (
@@ -252,6 +248,9 @@ const styles = StyleSheet.create({
     textAlign: 'center', 
     marginTop: 20 
   },
+  loadingIndicator: {
+    marginTop: 20
+  },
   // Report Incident Button
   reportIncidentBtn: {
     backgroundColor: '#00ff88',
@@ -282,6 +281,11 @@ const styles = StyleSheet.create({
   },
   reportMiddle: { 
     flex: 1 
+  },
+  reportTypeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8
   },
   reportType: { 
     color: '#fff', 

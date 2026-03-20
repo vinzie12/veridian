@@ -1,62 +1,116 @@
 import 'react-native-url-polyfill/auto';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createClient } from '@supabase/supabase-js';
+import { configService, setApiBaseUrl, getApiBaseUrl, clearAuth } from '../src/services/apiClient';
 
 // Config loaded from backend
 let supabaseUrl = null;
 let supabaseAnonKey = null;
 let supabaseClient = null;
 
-// API base URL (fallback, will be overridden by config)
-const DEFAULT_API_URL = 'http://192.168.254.104:3000';
+// Clear stale Supabase session tokens (but preserve app auth tokens)
+export const clearStaleTokens = async () => {
+  try {
+    // Only clear Supabase-specific session keys, NOT our auth tokens
+    const allKeys = await AsyncStorage.getAllKeys();
+    const supabaseSessionKeys = allKeys.filter(key => 
+      key.startsWith('sb-') ||  // Supabase session keys
+      key.includes('supabase.auth') 
+    );
+    
+    // Don't clear @veridian: tokens - those are our app's auth tokens
+    await AsyncStorage.multiRemove(supabaseSessionKeys);
+    console.log('[Supabase] Cleared stale Supabase session tokens');
+  } catch (error) {
+    console.error('[Supabase] Failed to clear stale tokens:', error);
+  }
+};
 
 // Load Supabase config from backend
 export const loadSupabaseConfig = async () => {
   try {
-    const response = await fetch(`${DEFAULT_API_URL}/config`);
-    const config = await response.json();
+    // Clear stale tokens BEFORE creating client to prevent corrupted session restore
+    await clearStaleTokens();
+    
+    const response = await configService.load();
+    
+    if (response.success && response.data?.supabaseUrl && response.data?.supabaseAnonKey) {
+      supabaseUrl = response.data.supabaseUrl;
+      supabaseAnonKey = response.data.supabaseAnonKey;
+      
+      // API URL is now managed by apiClient
+      if (response.data.apiUrl) {
+        setApiBaseUrl(response.data.apiUrl);
+      }
 
-    if (response.ok && config.supabaseUrl && config.supabaseAnonKey) {
-      supabaseUrl = config.supabaseUrl;
-      supabaseAnonKey = config.supabaseAnonKey;
-      API_URL = config.apiUrl || DEFAULT_API_URL;
-
-      // Create Supabase client
+      // Create Supabase client with explicit custom storage
+      // This ensures all required methods are available
+      const customStorage = {
+        getItem: async (key) => {
+          try {
+            return await AsyncStorage.getItem(key);
+          } catch {
+            return null;
+          }
+        },
+        setItem: async (key, value) => {
+          try {
+            await AsyncStorage.setItem(key, value);
+          } catch {
+            // ignore
+          }
+        },
+        removeItem: async (key) => {
+          try {
+            await AsyncStorage.removeItem(key);
+          } catch {
+            // ignore
+          }
+        },
+      };
+      
       supabaseClient = createClient(supabaseUrl, supabaseAnonKey, {
         auth: {
-          storage: AsyncStorage,
+          storage: customStorage,
           autoRefreshToken: true,
           persistSession: true,
           detectSessionInUrl: false,
         },
       });
+      
+      // Update the exported supabase reference
+      supabase = supabaseClient;
 
+      console.log('[Supabase] Config loaded successfully');
       return true;
     }
   } catch (error) {
-    console.error('Failed to load Supabase config:', error);
+    console.error('[Supabase] Failed to load config:', error);
   }
   return false;
 };
 
-// Export Supabase client (lazy initialization)
-export const supabase = new Proxy({}, {
-  get(target, prop) {
-    if (!supabaseClient) {
-      throw new Error('Supabase not initialized. Call loadSupabaseConfig() first.');
-    }
-    return supabaseClient[prop];
+// Export Supabase client - will be null until initialized
+// Components should check if client exists before using
+export let supabase = null;
+
+// Update the export after initialization
+const setSupabaseExport = (client) => {
+  supabase = client;
+};
+
+// API base URL - delegated to apiClient
+export const API_URL = new Proxy({}, {
+  get() {
+    return getApiBaseUrl();
   }
 });
-
-// API base URL (your Express backend)
-export let API_URL = DEFAULT_API_URL;
 
 // Helper to get the current session from Supabase
 export const getSession = async () => {
   const { data: { session }, error } = await supabase.auth.getSession();
   if (error) {
-    console.error('Error getting session:', error);
+    console.error('[Supabase] Error getting session:', error);
     return null;
   }
   return session;
@@ -69,6 +123,7 @@ export const getAccessToken = async () => {
 };
 
 // Helper to make authenticated API calls to Express backend
+// @deprecated Use apiClient.apiRequest() instead
 export const apiCall = async (endpoint, options = {}) => {
   const token = await getAccessToken();
   
@@ -81,7 +136,7 @@ export const apiCall = async (endpoint, options = {}) => {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
+  const response = await fetch(`${getApiBaseUrl()}${endpoint}`, {
     ...options,
     headers,
   });
@@ -110,18 +165,40 @@ export const getCurrentUser = async () => {
 
 // Set session from access token (called after backend login)
 export const setSession = async (accessToken, refreshToken = null) => {
-  const { data, error } = await supabase.auth.setSession({
-    access_token: accessToken,
-    refresh_token: refreshToken,
-  });
-  
-  if (error) {
-    console.error('Failed to set session:', error);
+  try {
+    // First, clear any existing Supabase session to avoid conflicts
+    if (supabaseClient) {
+      try {
+        await supabaseClient.auth.signOut();
+      } catch (e) {
+        // Ignore errors - session may already be invalid
+      }
+    }
+    
+    // Clear Supabase-specific storage keys
+    const allKeys = await AsyncStorage.getAllKeys();
+    const sbKeys = allKeys.filter(k => k.startsWith('sb-') || k.includes('supabase'));
+    if (sbKeys.length > 0) {
+      await AsyncStorage.multiRemove(sbKeys);
+    }
+    
+    // Now set the new session
+    const { data, error } = await supabaseClient.auth.setSession({
+      access_token: accessToken,
+      refresh_token: refreshToken || '',
+    });
+    
+    if (error) {
+      console.error('[Supabase] Failed to set session:', error);
+      return false;
+    }
+    
+    console.log('[Supabase] Session set successfully');
+    return true;
+  } catch (err) {
+    console.error('[Supabase] setSession error:', err);
     return false;
   }
-  
-  console.log('Supabase session set successfully');
-  return true;
 };
 
 // Listen to auth state changes
