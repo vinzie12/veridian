@@ -3,17 +3,27 @@
  * Handles all authentication-related API calls
  */
 
-import { apiGet, apiPost, apiDelete } from './api';
+import { apiRequest, setTokens, clearAuth as clearApiClientAuth } from './apiClient';
 import { log } from '../config/environment';
 
 /**
  * Login with email and password
  */
 export const login = async (email, password) => {
-  const response = await apiPost('/auth/login', { email, password }, { skipAuth: true });
-  
+  const response = await apiRequest('/auth/login', {
+    method: 'POST',
+    body: { email, password },
+    skipAuth: true,
+    skipRetry: true,
+  });
+
   log.info('Login successful:', response.data?.user?.email);
-  
+
+  // Store tokens in apiClient cache
+  if (response.data?.access_token) {
+    await setTokens(response.data.access_token, response.data.refresh_token);
+  }
+
   return response.data;
 };
 
@@ -21,10 +31,15 @@ export const login = async (email, password) => {
  * Send OTP (magic link) to email
  */
 export const sendOtp = async (email) => {
-  const response = await apiPost('/auth/login/otp', { email }, { skipAuth: true });
-  
+  const response = await apiRequest('/auth/login/otp', {
+    method: 'POST',
+    body: { email },
+    skipAuth: true,
+    skipRetry: true,
+  });
+
   log.info('OTP sent to:', email);
-  
+
   return response.data;
 };
 
@@ -32,10 +47,20 @@ export const sendOtp = async (email) => {
  * Verify OTP token
  */
 export const verifyOtp = async (email, token, type = 'magiclink') => {
-  const response = await apiPost('/auth/login/verify-otp', { email, token, type }, { skipAuth: true });
-  
+  const response = await apiRequest('/auth/login/verify-otp', {
+    method: 'POST',
+    body: { email, token, type },
+    skipAuth: true,
+    skipRetry: true,
+  });
+
   log.info('OTP verified for:', email);
-  
+
+  // Store tokens in apiClient cache
+  if (response.data?.access_token) {
+    await setTokens(response.data.access_token, response.data.refresh_token);
+  }
+
   return response.data;
 };
 
@@ -43,10 +68,15 @@ export const verifyOtp = async (email, token, type = 'magiclink') => {
  * Sign up new user
  */
 export const signup = async (userData) => {
-  const response = await apiPost('/auth/signup', userData, { skipAuth: true });
-  
+  const response = await apiRequest('/auth/signup', {
+    method: 'POST',
+    body: userData,
+    skipAuth: true,
+    skipRetry: true,
+  });
+
   log.info('Signup successful:', userData.email);
-  
+
   return response.data;
 };
 
@@ -55,22 +85,34 @@ export const signup = async (userData) => {
  */
 export const logout = async () => {
   try {
-    await apiPost('/auth/logout');
+    await apiRequest('/auth/logout', {
+      method: 'POST',
+      skipRetry: true,
+    });
     log.info('Logout successful');
   } catch (error) {
-    // Still clear local state even if API fails
     log.warn('Logout API failed, clearing local state');
   }
+  await clearApiClientAuth();
 };
 
 /**
  * Refresh access token
  */
-export const refreshToken = async (refreshToken) => {
-  const response = await apiPost('/auth/refresh', { refresh_token: refreshToken });
-  
+export const refreshToken = async (refreshTokenValue) => {
+  const response = await apiRequest('/auth/refresh', {
+    method: 'POST',
+    body: { refresh_token: refreshTokenValue },
+    skipAuth: true,
+  });
+
   log.info('Token refreshed');
-  
+
+  // Store tokens in apiClient cache
+  if (response.data?.access_token) {
+    await setTokens(response.data.access_token, response.data.refresh_token);
+  }
+
   return response.data;
 };
 
@@ -78,7 +120,9 @@ export const refreshToken = async (refreshToken) => {
  * Get current user profile
  */
 export const getCurrentUser = async () => {
-  const response = await apiGet('/auth/me');
+  const response = await apiRequest('/auth/me', {
+    skipRetry: true,
+  });
   return response.data;
 };
 
@@ -86,10 +130,13 @@ export const getCurrentUser = async () => {
  * Update user profile
  */
 export const updateProfile = async (updates) => {
-  const response = await apiPatch('/users/me', updates);
-  
+  const response = await apiRequest('/users/me', {
+    method: 'PATCH',
+    body: updates,
+  });
+
   log.info('Profile updated');
-  
+
   return response.data;
 };
 

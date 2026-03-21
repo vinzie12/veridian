@@ -12,24 +12,20 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { NetInfo } from 'react-native';
 
 // ============================================
 // CONFIGURATION
 // ============================================
 
-// Default URL - should be overridden by config from backend
 let API_BASE_URL = 'http://192.168.254.104:3000';
 
-// Token storage keys
 const TOKEN_KEY = '@veridian:access_token';
 const REFRESH_TOKEN_KEY = '@veridian:refresh_token';
 const USER_KEY = '@veridian:user';
 
-// Request config
 const DEFAULT_TIMEOUT = 30000;
 const MAX_RETRIES = 3;
-const RETRY_DELAY_BASE = 1000; // 1 second, doubles each retry
+const RETRY_DELAY_BASE = 1000;
 
 // ============================================
 // TOKEN MANAGEMENT
@@ -40,9 +36,10 @@ let cachedRefreshToken = null;
 
 /**
  * Get stored access token
+ * FIX 2: Added forceRefresh param to bypass stale in-memory cache
  */
-export const getAccessToken = async () => {
-  if (cachedToken) return cachedToken;
+export const getAccessToken = async (forceRefresh = false) => {
+  if (cachedToken && !forceRefresh) return cachedToken;
   try {
     cachedToken = await AsyncStorage.getItem(TOKEN_KEY);
     return cachedToken;
@@ -70,10 +67,16 @@ export const getRefreshToken = async () => {
  * Store tokens after login
  */
 export const setTokens = async (accessToken, refreshToken = null) => {
+  // Guard against null/undefined tokens
+  if (!accessToken) {
+    console.error('[API] setTokens called with null/undefined access token');
+    return false;
+  }
+
   try {
     cachedToken = accessToken;
     cachedRefreshToken = refreshToken;
-    
+
     await AsyncStorage.setItem(TOKEN_KEY, accessToken);
     if (refreshToken) {
       await AsyncStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
@@ -103,7 +106,7 @@ export const clearAuth = async () => {
 };
 
 /**
- * Set API base URL (called after config load)
+ * Set API base URL
  */
 export const setApiBaseUrl = (url) => {
   API_BASE_URL = url;
@@ -162,17 +165,9 @@ const getRequestKey = (method, url, body) => {
   return `${method}:${url}:${bodyHash}`;
 };
 
-const addPendingRequest = (key, promise) => {
-  pendingRequests.set(key, promise);
-};
-
-const removePendingRequest = (key) => {
-  pendingRequests.delete(key);
-};
-
-const getPendingRequest = (key) => {
-  return pendingRequests.get(key);
-};
+const addPendingRequest = (key, promise) => pendingRequests.set(key, promise);
+const removePendingRequest = (key) => pendingRequests.delete(key);
+const getPendingRequest = (key) => pendingRequests.get(key);
 
 // ============================================
 // TOKEN REFRESH
@@ -197,7 +192,6 @@ const onRefreshFailed = () => {
 
 const refreshAccessToken = async () => {
   if (isRefreshing) {
-    // Wait for existing refresh
     return new Promise((resolve) => {
       subscribeToRefresh((token) => resolve(token));
     });
@@ -223,13 +217,24 @@ const refreshAccessToken = async () => {
     const data = await response.json();
 
     if (!response.ok) {
-      throw new Error('Refresh failed');
+      throw new Error(data?.message || 'Refresh failed');
     }
 
-    const newAccessToken = data.access_token || data.session?.access_token;
-    const newRefreshToken = data.refresh_token || data.session?.refresh_token;
+    // FIX: Backend wraps response in { success, message, data: {...} }
+    const tokens = data.data || data;
+    const newAccessToken = tokens.access_token || tokens.session?.access_token;
+    const newRefreshToken = tokens.refresh_token || tokens.session?.refresh_token;
+
+    if (!newAccessToken) {
+      throw new Error('No access token in refresh response');
+    }
 
     await setTokens(newAccessToken, newRefreshToken);
+
+    // FIX 2: Explicitly update cache after refresh
+    cachedToken = newAccessToken;
+    cachedRefreshToken = newRefreshToken || cachedRefreshToken;
+
     isRefreshing = false;
     onRefreshed(newAccessToken);
     return newAccessToken;
@@ -250,16 +255,9 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 const shouldRetry = (error, attempt) => {
   if (attempt >= MAX_RETRIES) return false;
-  
-  // Retry on network errors
   if (error.code === 'NETWORK_ERROR') return true;
-  
-  // Retry on 5xx server errors
   if (error.statusCode >= 500) return true;
-  
-  // Retry on timeout
   if (error.code === 'TIMEOUT') return true;
-  
   return false;
 };
 
@@ -271,20 +269,6 @@ const getRetryDelay = (attempt) => {
 // MAIN REQUEST FUNCTION
 // ============================================
 
-/**
- * Make an API request
- * 
- * @param {string} endpoint - API endpoint (e.g., '/incidents')
- * @param {Object} options - Request options
- * @param {string} options.method - HTTP method (default: 'GET')
- * @param {Object} options.body - Request body
- * @param {Object} options.headers - Additional headers
- * @param {Object} options.params - Query parameters
- * @param {number} options.timeout - Timeout in ms (default: 30000)
- * @param {boolean} options.skipAuth - Skip token injection
- * @param {boolean} options.skipRetry - Skip retry logic
- * @param {boolean} options.deduplicate - Deduplicate identical requests
- */
 export const apiRequest = async (endpoint, options = {}) => {
   const {
     method = 'GET',
@@ -297,7 +281,6 @@ export const apiRequest = async (endpoint, options = {}) => {
     deduplicate = true,
   } = options;
 
-  // Build URL
   let url = `${API_BASE_URL}${endpoint}`;
   if (params) {
     const searchParams = new URLSearchParams();
@@ -307,12 +290,9 @@ export const apiRequest = async (endpoint, options = {}) => {
       }
     });
     const queryString = searchParams.toString();
-    if (queryString) {
-      url += `?${queryString}`;
-    }
+    if (queryString) url += `?${queryString}`;
   }
 
-  // Check for deduplication
   const requestKey = deduplicate ? getRequestKey(method, url, body) : null;
   if (requestKey) {
     const pending = getPendingRequest(requestKey);
@@ -322,10 +302,8 @@ export const apiRequest = async (endpoint, options = {}) => {
     }
   }
 
-  // Create request promise
   const requestPromise = executeRequest(url, method, body, headers, timeout, skipAuth, skipRetry);
 
-  // Track pending request
   if (requestKey) {
     addPendingRequest(requestKey, requestPromise);
     requestPromise.finally(() => removePendingRequest(requestKey));
@@ -338,7 +316,6 @@ export const apiRequest = async (endpoint, options = {}) => {
  * Execute the actual HTTP request with retry logic
  */
 const executeRequest = async (url, method, body, headers, timeout, skipAuth, skipRetry, attempt = 0) => {
-  // Build headers
   const requestHeaders = {
     'Content-Type': 'application/json',
     ...headers,
@@ -347,12 +324,21 @@ const executeRequest = async (url, method, body, headers, timeout, skipAuth, ski
   // Add auth header
   if (!skipAuth) {
     const token = await getAccessToken();
+
+    // DEBUG: Log token expiry status (remove in production)
+    if (token) {
+      try {
+        const payload = JSON.parse(atob(token.split('.')[1]));
+        const isExpired = Date.now() > payload.exp * 1000;
+        console.log(`[API] Token expires: ${new Date(payload.exp * 1000).toISOString()} | Expired: ${isExpired}`);
+      } catch (_) {}
+    }
+
     if (token) {
       requestHeaders['Authorization'] = `Bearer ${token}`;
     }
   }
 
-  // Create abort controller for timeout
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
 
@@ -368,34 +354,43 @@ const executeRequest = async (url, method, body, headers, timeout, skipAuth, ski
 
     clearTimeout(timeoutId);
 
-    // Parse response
     const contentType = response.headers.get('content-type');
     let data = null;
-    
+
     if (contentType?.includes('application/json')) {
       data = await response.json();
     } else {
       data = await response.text();
     }
 
-    // Handle 401 - try refresh
-    if (response.status === 401 && !skipAuth) {
+    // FIX 1: Handle BOTH 401 and 403 for token refresh
+    // Backend returns 403 for expired/invalid tokens instead of 401
+    if ((response.status === 401 || response.status === 403) && !skipAuth) {
+      console.log(`[API] Got ${response.status} - attempting token refresh...`);
       const newToken = await refreshAccessToken();
+
       if (newToken) {
-        // Retry with new token
+        // Retry original request with new token
         requestHeaders['Authorization'] = `Bearer ${newToken}`;
         const retryResponse = await fetch(url, {
           method,
           headers: requestHeaders,
           body: body ? JSON.stringify(body) : null,
         });
-        
-        const retryData = await retryResponse.json();
-        
+
+        const retryContentType = retryResponse.headers.get('content-type');
+        let retryData = null;
+
+        if (retryContentType?.includes('application/json')) {
+          retryData = await retryResponse.json();
+        } else {
+          retryData = await retryResponse.text();
+        }
+
         if (!retryResponse.ok) {
           throw ApiError.fromResponse(retryData, retryResponse.status);
         }
-        
+
         return normalizeResponse(retryData, retryResponse.status);
       } else {
         await clearAuth();
@@ -403,7 +398,6 @@ const executeRequest = async (url, method, body, headers, timeout, skipAuth, ski
       }
     }
 
-    // Handle errors
     if (!response.ok) {
       throw ApiError.fromResponse(data, response.status);
     }
@@ -413,7 +407,6 @@ const executeRequest = async (url, method, body, headers, timeout, skipAuth, ski
   } catch (error) {
     clearTimeout(timeoutId);
 
-    // Handle timeout
     if (error.name === 'AbortError') {
       const apiError = ApiError.timeout();
       if (!skipRetry && shouldRetry(apiError, attempt)) {
@@ -423,7 +416,6 @@ const executeRequest = async (url, method, body, headers, timeout, skipAuth, ski
       throw apiError;
     }
 
-    // Handle network errors
     if (error.message === 'Network request failed' || error.message === 'Network error') {
       const apiError = ApiError.network();
       if (!skipRetry && shouldRetry(apiError, attempt)) {
@@ -433,7 +425,6 @@ const executeRequest = async (url, method, body, headers, timeout, skipAuth, ski
       throw apiError;
     }
 
-    // Retry server errors
     if (error instanceof ApiError && !skipRetry && shouldRetry(error, attempt)) {
       await sleep(getRetryDelay(attempt));
       return executeRequest(url, method, body, headers, timeout, skipAuth, skipRetry, attempt + 1);
@@ -447,12 +438,10 @@ const executeRequest = async (url, method, body, headers, timeout, skipAuth, ski
  * Normalize API response
  */
 const normalizeResponse = (data, statusCode) => {
-  // If response is already normalized
   if (data && typeof data === 'object' && 'success' in data) {
     return data;
   }
 
-  // Normalize standard backend response
   return {
     success: statusCode >= 200 && statusCode < 300,
     statusCode,
@@ -468,30 +457,27 @@ const normalizeResponse = (data, statusCode) => {
 // ============================================
 
 export const api = {
-  get: (endpoint, params = null, options = {}) => 
+  get: (endpoint, params = null, options = {}) =>
     apiRequest(endpoint, { ...options, method: 'GET', params }),
-  
-  post: (endpoint, body = null, options = {}) => 
+
+  post: (endpoint, body = null, options = {}) =>
     apiRequest(endpoint, { ...options, method: 'POST', body }),
-  
-  put: (endpoint, body = null, options = {}) => 
+
+  put: (endpoint, body = null, options = {}) =>
     apiRequest(endpoint, { ...options, method: 'PUT', body }),
-  
-  patch: (endpoint, body = null, options = {}) => 
+
+  patch: (endpoint, body = null, options = {}) =>
     apiRequest(endpoint, { ...options, method: 'PATCH', body }),
-  
-  delete: (endpoint, options = {}) => 
+
+  delete: (endpoint, options = {}) =>
     apiRequest(endpoint, { ...options, method: 'DELETE' }),
 };
 
 // ============================================
-// AUTH SERVICE (Separate from feature requests)
+// AUTH SERVICE
 // ============================================
 
 export const authService = {
-  /**
-   * Login with email and password
-   */
   login: async (email, password) => {
     const response = await apiRequest('/auth/login', {
       method: 'POST',
@@ -510,9 +496,6 @@ export const authService = {
     return response;
   },
 
-  /**
-   * Login with OTP (magic link)
-   */
   sendOtp: async (email) => {
     return apiRequest('/auth/login/otp', {
       method: 'POST',
@@ -522,9 +505,6 @@ export const authService = {
     });
   },
 
-  /**
-   * Verify OTP token
-   */
   verifyOtp: async (email, token) => {
     const response = await apiRequest('/auth/login/verify-otp', {
       method: 'POST',
@@ -543,9 +523,6 @@ export const authService = {
     return response;
   },
 
-  /**
-   * Signup new user
-   */
   signup: async (userData) => {
     return apiRequest('/auth/signup', {
       method: 'POST',
@@ -555,9 +532,6 @@ export const authService = {
     });
   },
 
-  /**
-   * Logout
-   */
   logout: async () => {
     try {
       await apiRequest('/auth/logout', {
@@ -565,23 +539,15 @@ export const authService = {
         skipRetry: true,
       });
     } catch (error) {
-      // Continue with local logout even if API fails
       console.warn('[API] Logout API failed:', error.message);
     }
-    
     await clearAuth();
   },
 
-  /**
-   * Get current user
-   */
   getCurrentUser: async () => {
     return apiRequest('/auth/me', { skipRetry: true });
   },
 
-  /**
-   * Refresh token
-   */
   refresh: async () => {
     const newToken = await refreshAccessToken();
     if (!newToken) {
@@ -590,9 +556,6 @@ export const authService = {
     return { success: true, access_token: newToken };
   },
 
-  /**
-   * Check if authenticated
-   */
   isAuthenticated: async () => {
     const token = await getAccessToken();
     return !!token;
@@ -600,33 +563,23 @@ export const authService = {
 };
 
 // ============================================
-// INCIDENT SERVICE (Feature requests)
+// INCIDENT SERVICE
 // ============================================
 
 export const incidentService = {
-  /**
-   * Get incidents list
-   */
   list: async (filters = {}) => {
     const params = {};
     if (filters.status) params.status = filters.status;
     if (filters.severity) params.severity = filters.severity;
     if (filters.page) params.page = filters.page;
     if (filters.limit) params.limit = filters.limit;
-    
     return apiRequest('/incidents', { params });
   },
 
-  /**
-   * Get single incident
-   */
   get: async (incidentId) => {
     return apiRequest(`/incidents/${incidentId}`);
   },
 
-  /**
-   * Create incident
-   */
   create: async (incidentData) => {
     return apiRequest('/incidents', {
       method: 'POST',
@@ -634,9 +587,6 @@ export const incidentService = {
     });
   },
 
-  /**
-   * Create public incident (anonymous)
-   */
   createPublic: async (incidentData) => {
     return apiRequest('/incidents/public', {
       method: 'POST',
@@ -645,18 +595,12 @@ export const incidentService = {
     });
   },
 
-  /**
-   * Get public incident by tracking ID
-   */
   getPublic: async (trackingId) => {
     return apiRequest(`/incidents/public/${trackingId}`, {
       skipAuth: true,
     });
   },
 
-  /**
-   * Update incident
-   */
   update: async (incidentId, updates) => {
     return apiRequest(`/incidents/${incidentId}`, {
       method: 'PATCH',
@@ -664,9 +608,6 @@ export const incidentService = {
     });
   },
 
-  /**
-   * Update incident status
-   */
   updateStatus: async (incidentId, status) => {
     return apiRequest(`/incidents/${incidentId}/status`, {
       method: 'PATCH',
@@ -674,9 +615,6 @@ export const incidentService = {
     });
   },
 
-  /**
-   * Get incident types
-   */
   getTypes: async () => {
     return apiRequest('/incident-types');
   },
@@ -695,6 +633,22 @@ export const callService = {
       method: 'POST',
       body: { incidentId, calleeId, callMode, callerName, calleeName },
     });
+  },
+
+  /**
+   * FIX 3: Get single call session via backend (bypasses RLS)
+   * Replaces direct Supabase getCallSession() call
+   */
+  getSession: async (callSessionId) => {
+    return apiRequest(`/call/sessions/${callSessionId}`);
+  },
+
+  /**
+   * FIX 3: Get active call for incident via backend (bypasses RLS)
+   * Replaces direct Supabase getActiveCallForIncident() call
+   */
+  getActiveCall: async (incidentId) => {
+    return apiRequest(`/call/active/${incidentId}`);
   },
 
   /**
@@ -729,9 +683,6 @@ export const callService = {
 // ============================================
 
 export const configService = {
-  /**
-   * Load config from backend
-   */
   load: async () => {
     const response = await apiRequest('/config', {
       skipAuth: true,
@@ -752,20 +703,15 @@ export const configService = {
 // ============================================
 
 export default {
-  // Core
   apiRequest,
   api,
   ApiError,
-  
-  // Token management
   getAccessToken,
   getRefreshToken,
   setTokens,
   clearAuth,
   setApiBaseUrl,
   getApiBaseUrl,
-  
-  // Services
   authService,
   incidentService,
   callService,

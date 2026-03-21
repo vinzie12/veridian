@@ -144,7 +144,7 @@ export default function HomeScreen({ navigation }) {
         </View>
         <View style={styles.headerRight}>
           <View style={styles.agencyBadge}>
-            <Text style={styles.agencyText}>{user.role.toUpperCase()}</Text>
+            <Text style={styles.agencyText}>{(user?.role || 'unknown').toUpperCase()}</Text>
           </View>
           <TouchableOpacity 
             style={styles.settingsBtn}

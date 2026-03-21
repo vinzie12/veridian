@@ -106,21 +106,6 @@ const errorHandler = (err, req, res, next) => {
     return res.status(mappedError.statusCode).json(response);
   }
 
-  // Handle JWT errors
-  if (err.name === 'JsonWebTokenError') {
-    return res.status(401).json(unauthorized('Invalid token', requestId));
-  }
-  
-  if (err.name === 'TokenExpiredError') {
-    const response = error(
-      'Token expired',
-      'TOKEN_EXPIRED',
-      { expiredAt: err.expiredAt },
-      requestId
-    );
-    return res.status(401).json(response);
-  }
-
   // Handle Joi/Zod validation errors
   if (err.name === 'ValidationError' || (err.details && Array.isArray(err.details))) {
     const response = validationError(err.details, requestId);

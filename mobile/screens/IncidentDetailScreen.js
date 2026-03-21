@@ -9,8 +9,13 @@ import { styles } from './styles/IncidentDetailScreenStyles';
 import { useAuth } from '../src/context/AuthContext';
 import { incidentService, callService } from '../src/services/apiClient';
 import { STATUS_COLORS, STATUS_ICONS, SEVERITY_COLORS } from '../constants';
-import { getActiveCallForIncident, CALL_MODE, CALL_STATUS } from '../lib/callSessionService';
+
+// FIX: Only import CALL_MODE and CALL_STATUS constants from callSessionService
+// Removed: getActiveCallForIncident (was using direct Supabase — blocked by RLS)
+import { CALL_MODE, CALL_STATUS } from '../lib/callSessionService';
+
 import { formatDate } from '../src/utils/time';
+
 
 export default function IncidentDetailScreen({ route, navigation }) {
   const { incidentId } = route.params;
@@ -29,23 +34,29 @@ export default function IncidentDetailScreen({ route, navigation }) {
   }, []);
 
   const fetchIncident = async () => {
-    try {
-      const response = await incidentService.get(incidentId);
-      // Backend returns { data: { incident: {...} } }
-      const incidentData = response?.data?.incident || response?.data || response;
-      setIncident(incidentData);
-      
-      // Check for active call
-      const { callSession } = await getActiveCallForIncident(incidentId);
-      setActiveCall(callSession);
-    } catch (error) {
-      console.error('Failed to fetch incident:', error);
-      Alert.alert('Error', 'Failed to load incident details');
-      navigation.goBack();
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Incident fetch — fatal if it fails
+  try {
+    const response = await incidentService.get(incidentId);
+    const incidentData = response?.data?.incident || response?.data || response;
+    setIncident(incidentData);
+  } catch (error) {
+    console.error('Failed to fetch incident:', error);
+    Alert.alert('Error', 'Failed to load incident details');
+    navigation.goBack();
+    return;
+  } finally {
+    setLoading(false);
+  }
+
+  // Active call fetch — non-fatal, just leave activeCall as null if it fails
+  try {
+    const callResponse = await callService.getActiveCall(incidentId);
+    const callSession = callResponse?.data?.callSession || null;
+    setActiveCall(callSession);
+  } catch (error) {
+    console.warn('Could not fetch active call (non-fatal):', error.message);
+  }
+};
 
   const updateStatus = async (newStatus) => {
     setUpdating(true);
@@ -69,13 +80,30 @@ export default function IncidentDetailScreen({ route, navigation }) {
     }
   };
 
-  // Handle call mode selection
   const handleStartCall = async (mode) => {
     setShowCallModeModal(false);
     setStartingCall(true);
-    
+
     try {
-      // Create call session via API (bypasses RLS)
+      // FIX: Guard against null reporter_id (anonymous reports)
+      if (!incident.reporter_id) {
+        Alert.alert(
+          'Cannot Call',
+          'This incident was submitted anonymously. No reporter to call.'
+        );
+        setStartingCall(false);
+        return;
+      }
+
+      console.log('[IncidentDetail] Starting call:', {
+        incidentId: incident.id?.slice(0, 8),
+        reporterId: incident.reporter_id?.slice(0, 8),
+        reporterName: incident.reporter_name,
+        callerName: user?.full_name,
+        callerId: user?.id?.slice(0, 8),
+        callerRole: user?.role
+      });
+
       const response = await callService.createSession(
         incident.id,
         incident.reporter_id,
@@ -83,51 +111,59 @@ export default function IncidentDetailScreen({ route, navigation }) {
         user?.full_name || 'Admin',
         incident.reporter_name || 'Reporter'
       );
-      
-      const callSession = response?.data?.callSession;
-      
-      if (callSession) {
-        // Navigate to appropriate call screen
+
+      // FIX: Handle both response shapes from normalizeResponse
+      const callSession =
+        response?.data?.callSession ||
+        response?.data ||
+        null;
+
+      if (callSession?.id) {
+        // Update local activeCall state so the banner shows immediately
+        setActiveCall(callSession);
+
         if (mode === CALL_MODE.JITSI) {
           navigation.navigate('VerificationCall', {
             incidentId: incident.id,
             callSessionId: callSession.id,
             callerName: user?.full_name || 'Admin',
-            reporterName: incident.reporter_name || 'Reporter'
+            reporterName: incident.reporter_name || 'Reporter',
           });
         } else if (mode === CALL_MODE.IN_APP) {
           navigation.navigate('InAppCall', {
             incidentId: incident.id,
             callSessionId: callSession.id,
+            callSession,
             isCaller: true,
           });
         }
       } else {
-        Alert.alert('Error', response?.error || 'Failed to start call');
+        console.error('Unexpected response shape:', JSON.stringify(response));
+        Alert.alert('Error', response?.error || response?.message || 'Failed to start call');
       }
     } catch (error) {
       console.error('Failed to start call:', error);
-      Alert.alert('Error', 'Failed to start call');
+      Alert.alert('Error', error?.message || 'Failed to start call');
     } finally {
       setStartingCall(false);
     }
   };
 
-  // Navigate to existing call
   const handleJoinExistingCall = () => {
     if (!activeCall) return;
-    
+
     if (activeCall.call_mode === CALL_MODE.JITSI) {
       navigation.navigate('VerificationCall', {
         incidentId: incident.id,
         callSessionId: activeCall.id,
         callerName: user?.full_name || 'Admin',
-        reporterName: incident.reporter_name || 'Reporter'
+        reporterName: incident.reporter_name || 'Reporter',
       });
     } else {
       navigation.navigate('InAppCall', {
         incidentId: incident.id,
         callSessionId: activeCall.id,
+        callSession: activeCall,
         isCaller: true,
       });
     }
@@ -146,9 +182,10 @@ export default function IncidentDetailScreen({ route, navigation }) {
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+
         {/* Header */}
         <View style={styles.header}>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.backButton}
             onPress={() => navigation.goBack()}
           >
@@ -191,7 +228,7 @@ export default function IncidentDetailScreen({ route, navigation }) {
         </View>
 
         {/* Location */}
-        <TouchableOpacity 
+        <TouchableOpacity
           style={[styles.card, styles.cardSecondary]}
           onPress={openMap}
         >
@@ -270,7 +307,7 @@ export default function IncidentDetailScreen({ route, navigation }) {
                     {
                       backgroundColor: incident.status === status ? STATUS_COLORS[status] : '#1a1a1a',
                       borderColor: STATUS_COLORS[status] || '#333',
-                      opacity: updating ? 0.5 : 1
+                      opacity: updating ? 0.5 : 1,
                     }
                   ]}
                   onPress={() => updateStatus(status)}
@@ -288,7 +325,7 @@ export default function IncidentDetailScreen({ route, navigation }) {
           </View>
         )}
 
-        {/* Verification Call - Only for non-citizens (admin/responder) */}
+        {/* Verification Call - Only for non-citizens */}
         {!isCitizen && (
           <View>
             {/* Active Call Banner */}
@@ -309,7 +346,7 @@ export default function IncidentDetailScreen({ route, navigation }) {
                 <Text style={styles.callLink}>JOIN →</Text>
               </TouchableOpacity>
             )}
-            
+
             {/* Start Call Button */}
             {!activeCall && (
               <TouchableOpacity
@@ -323,7 +360,9 @@ export default function IncidentDetailScreen({ route, navigation }) {
                     {startingCall ? 'STARTING CALL...' : 'START VERIFICATION CALL'}
                   </Text>
                   <Text style={styles.callSubtextDark}>
-                    Choose call mode: Jitsi or In-App
+                    {incident.reporter_id
+                      ? 'Choose call mode: Jitsi or In-App'
+                      : 'Anonymous report — no reporter to call'}
                   </Text>
                 </View>
                 <Text style={styles.callLink}>→</Text>
@@ -343,7 +382,7 @@ export default function IncidentDetailScreen({ route, navigation }) {
             <View style={styles.modalContent}>
               <Text style={styles.modalTitle}>Choose Call Mode</Text>
               <Text style={styles.modalSubtitle}>Select how you want to call the reporter</Text>
-              
+
               {/* Jitsi Option */}
               <TouchableOpacity
                 style={[styles.callModeOption, styles.callModeOptionJitsi]}
@@ -358,7 +397,7 @@ export default function IncidentDetailScreen({ route, navigation }) {
                 </View>
                 <Text style={[styles.callModeArrow, styles.callModeArrowJitsi]}>→</Text>
               </TouchableOpacity>
-              
+
               {/* In-App Option */}
               <TouchableOpacity
                 style={[styles.callModeOption, styles.callModeOptionInApp]}
@@ -373,8 +412,8 @@ export default function IncidentDetailScreen({ route, navigation }) {
                 </View>
                 <Text style={[styles.callModeArrow, styles.callModeArrowInApp]}>→</Text>
               </TouchableOpacity>
-              
-              {/* Cancel Button */}
+
+              {/* Cancel */}
               <TouchableOpacity
                 style={styles.cancelButton}
                 onPress={() => setShowCallModeModal(false)}
@@ -384,7 +423,7 @@ export default function IncidentDetailScreen({ route, navigation }) {
             </View>
           </View>
         </Modal>
-        
+
         {/* Citizen Status Info */}
         {isCitizen && (
           <View style={[styles.card, styles.cardDark]}>

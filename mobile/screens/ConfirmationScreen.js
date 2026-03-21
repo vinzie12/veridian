@@ -9,8 +9,10 @@ const ConfirmationScreen = ({ route, navigation }) => {
   const { user } = useAuth();
   const { incident, isAnonymous } = route.params;
 
-  // Determine which home screen to navigate to based on user role
-  const homeScreen = user?.role === 'citizen' ? 'CitizenHome' : 'Home';
+  // Navigate to HomeTabs which contains the correct tabs based on user role
+  const navigateHome = () => {
+    navigation.replace('HomeTabs');
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -105,14 +107,14 @@ const ConfirmationScreen = ({ route, navigation }) => {
           <>
             <TouchableOpacity
               style={styles.addDetailsBtn}
-              onPress={() => navigation.replace(homeScreen)}
+              onPress={navigateHome}
             >
               <Text style={styles.addDetailsText}>VIEW MY REPORTS</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               style={styles.homeBtn}
-              onPress={() => navigation.replace(homeScreen)}
+              onPress={navigateHome}
             >
               <Text style={styles.homeBtnText}>BACK TO HOME</Text>
             </TouchableOpacity>

@@ -77,19 +77,49 @@ class AuthRepository {
   }
 
   /**
-   * Refresh session
+   * Refresh session - server-side implementation
+   * Uses Supabase REST API directly since server client has no session state
    */
   async refreshSession(refreshToken) {
-    const { data, error } = await this.client.refreshSession({
-      refresh_token: refreshToken
-    });
-    
-    if (error) {
-      logger.warn('Session refresh failed', { error: error.message });
-      return { error, data: null };
+    // Use Supabase REST API to refresh the token
+    // This is the only reliable way to refresh on server-side without session persistence
+    try {
+      const response = await fetch(
+        `${process.env.SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'apikey': process.env.SUPABASE_ANON_KEY,
+          },
+          body: JSON.stringify({ refresh_token: refreshToken }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        logger.warn('Session refresh failed', { error: data.error_description || data.message });
+        return { error: new Error(data.error_description || data.message || 'Refresh failed'), data: null };
+      }
+
+      // Return in expected format: { data: { session: {...}, user: {...} }, error: null }
+      return {
+        data: {
+          session: {
+            access_token: data.access_token,
+            refresh_token: data.refresh_token,
+            expires_at: data.expires_at,
+            expires_in: data.expires_in,
+          },
+          user: data.user,
+        },
+        error: null,
+      };
+    } catch (err) {
+      logger.error('Session refresh exception', { error: err.message });
+      return { error: err, data: null };
     }
-    
-    return { data, error: null };
   }
 
   // ============================================

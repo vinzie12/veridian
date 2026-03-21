@@ -10,7 +10,6 @@ const {
   loginSchema, 
   sendOtpSchema, 
   verifyOtpSchema, 
-  legacyLoginSchema, 
   signupSchema, 
   refreshTokenSchema 
 } = require('../validators/auth.validator');
@@ -28,7 +27,6 @@ const {
 router.post('/login', authLimiter, validateBody(loginSchema), authController.login);
 router.post('/login/otp', sensitiveLimiter, validateBody(sendOtpSchema), authController.sendOtp);
 router.post('/login/verify-otp', sensitiveLimiter, validateBody(verifyOtpSchema), authController.verifyOtp);
-router.post('/login-legacy', authLimiter, validateBody(legacyLoginSchema), authController.legacyLogin);
 router.post('/signup', createAccountLimiter, validateBody(signupSchema), authController.signup);
 router.post('/refresh', authLimiter, validateBody(refreshTokenSchema), authController.refreshToken);
 

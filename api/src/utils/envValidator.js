@@ -11,8 +11,7 @@ const logger = require('./logger');
 const REQUIRED_ENV_VARS = [
   'SUPABASE_URL',
   'SUPABASE_ANON_KEY',
-  'SUPABASE_SERVICE_ROLE_KEY',
-  'JWT_SECRET'
+  'SUPABASE_SERVICE_ROLE_KEY'
 ];
 
 /**
@@ -48,13 +47,6 @@ const validateVar = (name, value, required = true) => {
   }
   
   // Specific validations
-  if (name === 'JWT_SECRET' && value.length < 32) {
-    return { 
-      valid: false, 
-      error: 'JWT_SECRET should be at least 32 characters' 
-    };
-  }
-  
   if (name === 'SUPABASE_URL' && !value.includes('supabase.co')) {
     return { 
       valid: true, 

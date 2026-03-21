@@ -45,11 +45,6 @@ const verifyOtpSchema = z.object({
   type: z.enum(['magiclink', 'signup', 'recovery', 'invite']).optional()
 });
 
-const legacyLoginSchema = z.object({
-  badge_number: badgeNumberSchema,
-  password: loginPasswordSchema
-});
-
 const signupSchema = z.object({
   email: emailSchema,
   password: passwordSchema,
@@ -87,7 +82,6 @@ module.exports = {
   loginSchema,
   sendOtpSchema,
   verifyOtpSchema,
-  legacyLoginSchema,
   signupSchema,
   setPasswordSchema,
   refreshTokenSchema,

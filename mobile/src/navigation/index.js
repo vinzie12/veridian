@@ -4,7 +4,7 @@
  */
 
 import React from 'react';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { ActivityIndicator, View, Text } from 'react-native';
@@ -159,7 +159,7 @@ export const RootNavigator = () => {
   }
 
   return (
-    <NavigationContainer>
+    <NavigationContainer ref={navigationRef}>
       {isLoggedIn && user ? <MainStack /> : <AuthStack />}
     </NavigationContainer>
   );
@@ -168,26 +168,24 @@ export const RootNavigator = () => {
 /**
  * Navigation reference for imperative navigation
  */
-let navigationRef = null;
-
-export const setNavigationRef = (ref) => {
-  navigationRef = ref;
-};
+export const navigationRef = createNavigationContainerRef();
 
 export const navigate = (name, params) => {
-  if (navigationRef) {
+  if (navigationRef.isReady()) {
     navigationRef.navigate(name, params);
+  } else {
+    console.warn('[Navigation] Cannot navigate - ref not ready');
   }
 };
 
 export const reset = (state) => {
-  if (navigationRef) {
+  if (navigationRef.isReady()) {
     navigationRef.reset(state);
   }
 };
 
 export const goBack = () => {
-  if (navigationRef) {
+  if (navigationRef.isReady()) {
     navigationRef.goBack();
   }
 };

@@ -68,7 +68,7 @@ class UserRepository extends BaseRepository {
   }
 
   /**
-   * Increment token version (revokes all legacy JWTs)
+   * Increment token version (used for session revocation)
    * @param {string} id - User ID
    * @returns {Promise<void>}
    */

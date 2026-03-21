@@ -1,16 +1,14 @@
 /**
  * Call Service
  * Business logic for call/verification operations
+ * Uses supabaseAdmin to bypass RLS/auth checks
  */
 
 const { env } = require('../config');
 const { NotFoundError, ValidationError } = require('../utils/errors');
 const { db } = require('../repositories/database');
+const { supabaseAdmin } = require('../config/supabase');
 
-// In-memory store for active calls (in production, use Redis/database)
-const activeCalls = new Map();
-
-// Call status constants
 const CALL_STATUS = {
   RINGING: 'ringing',
   ACCEPTED: 'accepted',
@@ -20,131 +18,46 @@ const CALL_STATUS = {
   ENDED: 'ended',
 };
 
-// Ringing timeout (60 seconds)
-const RINGING_TIMEOUT_MS = 60 * 1000;
+const RINGING_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes instead of 60 seconds
 
 class CallService {
-  /**
-   * Generate call token
-   * @param {string} incidentId - Incident ID
-   * @param {string} role - User role (admin/reporter)
-   * @param {object} user - Current user
-   * @returns {object} Token and room info
-   */
   async generateToken(incidentId, role, user) {
-    if (!incidentId) {
-      throw new ValidationError('incidentId is required');
-    }
-
-    // Check if LiveKit credentials are configured
-    if (!env.livekit.apiKey || !env.livekit.apiSecret || !env.livekit.serverUrl) {
-      console.warn('LiveKit credentials not configured, returning mock token');
+    if (!incidentId) throw new ValidationError('incidentId is required');
+    if (!env.livekit?.apiKey) {
       return {
         token: 'mock_token_' + Date.now(),
         roomName: 'room_' + incidentId.slice(0, 8),
         serverUrl: null,
-        warning: 'Using mock token - configure LIVEKIT_API_KEY, LIVEKIT_API_SECRET, and LIVEKIT_SERVER_URL in .env'
       };
     }
-
-    // Import LiveKit Server SDK
     const { AccessToken } = require('livekit-server-sdk');
-
-    // Create room name
     const roomName = `verification-${incidentId.slice(0, 8)}`;
-
-    // Determine permissions
-    const isAdmin = role === 'admin';
-
-    // Create access token
     const at = new AccessToken(env.livekit.apiKey, env.livekit.apiSecret, {
       identity: user.id,
-      name: user.full_name || user.email
+      name: user.full_name || user.email,
     });
-
-    // Add grants
-    at.addGrant({
-      roomJoin: true,
-      room: roomName,
-      canPublish: true,
-      canSubscribe: true,
-      canPublishData: true,
-      canPublishSources: isAdmin
-        ? ['camera', 'microphone', 'screen_share', 'screen_share_audio']
-        : ['microphone']
-    });
-
-    const token = at.toJwt();
-
-    // Track active call
-    activeCalls.set(incidentId, {
-      roomName,
-      startedAt: new Date(),
-      participants: [user.id]
-    });
-
-    return {
-      token,
-      roomName,
-      serverUrl: env.livekit.serverUrl
-    };
+    at.addGrant({ roomJoin: true, room: roomName, canPublish: true, canSubscribe: true });
+    return { token: at.toJwt(), roomName, serverUrl: env.livekit.serverUrl };
   }
 
-  /**
-   * Get active call status
-   * @param {string} incidentId - Incident ID
-   * @returns {object|null} Active call info
-   */
-  getActiveCall(incidentId) {
-    return activeCalls.get(incidentId) || null;
-  }
-
-  /**
-   * End call
-   * @param {string} incidentId - Incident ID
-   * @returns {boolean} Success
-   */
-  endCall(incidentId) {
-    if (activeCalls.has(incidentId)) {
-      activeCalls.delete(incidentId);
-      return true;
-    }
-    return false;
-  }
-
-  /**
-   * Get all active calls
-   * @returns {Array} Active calls
-   */
-  getAllActiveCalls() {
-    return Array.from(activeCalls.entries()).map(([id, call]) => ({
-      incidentId: id,
-      ...call
-    }));
-  }
-
-  /**
-   * Create call session in database
-   * @param {object} data - Call session data
-   * @param {object} user - Current user
-   * @returns {object} Created call session
-   */
   async createCallSession(data, user) {
     const { incidentId, calleeId, callMode, callerName, calleeName } = data;
-
     if (!incidentId || !calleeId || !callMode) {
       throw new ValidationError('incidentId, calleeId, and callMode are required');
     }
-
-    // Generate unique room name
     const timestamp = Date.now().toString(36);
-    const shortIncident = incidentId?.slice(0, 8) || '';
-    const roomName = `veridian-${shortIncident}-${timestamp}`;
-
-    // Calculate expiry time (60s from now)
+    const roomName = `veridian-${incidentId.slice(0, 8)}-${timestamp}`;
     const expiresAt = new Date(Date.now() + RINGING_TIMEOUT_MS).toISOString();
 
-    // Insert using admin client (bypasses RLS)
+    console.log('[CallService] Creating call session:', {
+      incidentId: incidentId?.slice(0, 8),
+      callerId: user?.id?.slice(0, 8),
+      calleeId: calleeId?.slice(0, 8),
+      callMode,
+      callerName,
+      calleeName
+    });
+
     const result = await db.insert('call_sessions', {
       incident_id: incidentId,
       caller_id: user.id,
@@ -156,8 +69,147 @@ class CallService {
       caller_name: callerName || user.full_name || 'Admin',
       callee_name: calleeName || 'Reporter',
     });
-
     return result;
+  }
+
+  async getCallSession(callSessionId) {
+    const { data, error } = await supabaseAdmin
+      .from('call_sessions')
+      .select('*')
+      .eq('id', callSessionId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) throw new NotFoundError('Call session not found');
+    return data;
+  }
+
+  async updateCallStatus(callSessionId, newStatus, userId) {
+    const { data: current, error: fetchError } = await supabaseAdmin
+      .from('call_sessions')
+      .select('*')
+      .eq('id', callSessionId)
+      .maybeSingle();
+
+    if (fetchError) throw fetchError;
+    if (!current) throw new NotFoundError('Call session not found');
+
+    const isCaller = current.caller_id === userId;
+    const isCallee = current.callee_id === userId;
+
+    const allowed = {
+      accepted:  isCallee && current.status === CALL_STATUS.RINGING,
+      declined:  isCallee && current.status === CALL_STATUS.RINGING,
+      cancelled: isCaller && current.status === CALL_STATUS.RINGING,
+      ended:     (isCaller || isCallee) && current.status === CALL_STATUS.ACCEPTED,
+    };
+
+    if (!allowed[newStatus]) {
+      throw new ValidationError(
+        `Cannot transition from ${current.status} to ${newStatus}` 
+      );
+    }
+
+    const timestamps = {
+      accepted:  { answered_at:   new Date().toISOString() },
+      declined:  { declined_at:   new Date().toISOString() },
+      cancelled: { cancelled_at:  new Date().toISOString() },
+      ended:     { ended_at:      new Date().toISOString() },
+    };
+
+    const { data, error } = await supabaseAdmin
+      .from('call_sessions')
+      .update({ status: newStatus, ...timestamps[newStatus] })
+      .eq('id', callSessionId)
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data;
+  }
+
+  async getActiveCall(incidentId) {
+    const { data, error } = await supabaseAdmin
+      .from('call_sessions')
+      .select('*')
+      .eq('incident_id', incidentId)
+      .in('status', [CALL_STATUS.RINGING, CALL_STATUS.ACCEPTED])
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw error;
+    return data || null;
+  }
+
+  async endActiveCall(incidentId) {
+    const { data, error } = await supabaseAdmin
+      .from('call_sessions')
+      .update({ status: CALL_STATUS.ENDED, ended_at: new Date().toISOString() })
+      .eq('incident_id', incidentId)
+      .in('status', [CALL_STATUS.RINGING, CALL_STATUS.ACCEPTED])
+      .select();
+    if (error) throw error;
+    return data?.length > 0;
+  }
+
+  async getAllActiveCalls() {
+    const { data, error } = await supabaseAdmin
+      .from('call_sessions')
+      .select('*')
+      .in('status', [CALL_STATUS.RINGING, CALL_STATUS.ACCEPTED]);
+    if (error) throw error;
+    return data || [];
+  }
+
+  async getIncomingCallForUser(userId) {
+    console.log('[CallService] Checking incoming calls for user:', userId?.slice(0, 8));
+    
+    // First, clean up expired ringing calls (mark as missed)
+    const now = new Date().toISOString();
+    const { error: cleanupError } = await supabaseAdmin
+      .from('call_sessions')
+      .update({ status: CALL_STATUS.MISSED })
+      .eq('status', CALL_STATUS.RINGING)
+      .lt('expires_at', now);
+    
+    if (cleanupError) {
+      console.error('[CallService] Cleanup error:', cleanupError);
+    }
+    
+    // Now get active incoming calls for this user
+    const { data, error } = await supabaseAdmin
+      .from('call_sessions')
+      .select(`
+        id,
+        incident_id,
+        caller_id,
+        callee_id,
+        call_mode,
+        status,
+        room_name,
+        caller_name,
+        callee_name,
+        created_at,
+        expires_at
+      `)
+      .eq('callee_id', userId)
+      .eq('status', CALL_STATUS.RINGING)
+      .gt('expires_at', now)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[CallService] Error fetching incoming call:', error);
+      throw error;
+    }
+
+    console.log('[CallService] Incoming call result:', data ? {
+      id: data.id?.slice(0, 8),
+      callee: data.callee_id?.slice(0, 8),
+      caller: data.caller_name
+    } : null);
+
+    return data;
   }
 }
 

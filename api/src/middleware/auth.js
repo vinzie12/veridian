@@ -1,6 +1,6 @@
 /**
  * Authentication & Authorization Middleware
- * Comprehensive auth system with Supabase JWT, token refresh, and RBAC
+ * Uses Supabase Auth exclusively for authentication
  */
 
 const { supabase, supabaseAdmin } = require('../config/supabase');
@@ -18,7 +18,6 @@ const {
   canManageRole,
   getRolePermissions 
 } = require('../config/permissions');
-const jwt = require('jsonwebtoken');
 
 // Token blacklist cache (for immediate revocation)
 // In production, use Redis
@@ -100,7 +99,7 @@ const loadUserProfile = async (userId, token) => {
 };
 
 /**
- * Authenticate Supabase JWT (Primary authentication method)
+ * Authenticate Supabase JWT
  * - Verifies JWT with Supabase
  * - Loads user profile
  * - Checks account status
@@ -234,113 +233,12 @@ const authenticateWithRefresh = async (req, res, next) => {
   }
 };
 
-/**
- * Legacy JWT authentication (for migration period only)
- * @deprecated Use authenticate() instead
- */
-const authenticateLegacy = async (req, res, next) => {
-  const token = extractToken(req);
-  
-  if (!token) {
-    return next(new UnauthorizedError('Access denied. No token provided.'));
-  }
-  
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    
-    // Load user to check status and token version
-    const user = await userRepository.findById(decoded.user_id || decoded.id);
-    
-    if (!user) {
-      return next(new ForbiddenError('User not found.'));
-    }
-    
-    if (user.status !== 'active') {
-      return next(new ForbiddenError(`Account is ${user.status}. Contact your administrator.`));
-    }
-    
-    // Check token version for revocation
-    if (decoded.version !== undefined && decoded.version !== (user.token_version || 0)) {
-      return next(new ForbiddenError('Token has been revoked. Please login again.'));
-    }
-    
-    req.user = {
-      id: user.id,
-      email: user.email,
-      role: user.role,
-      agency_id: user.agency_id,
-      status: user.status,
-      full_name: user.full_name,
-      badge_number: user.badge_number,
-      permissions: getRolePermissions(user.role)
-    };
-    req.token = token;
-    req.authType = 'legacy';
-    
-    userRepository.updateLastActive(user.id).catch(console.error);
-    
-    next();
-  } catch (err) {
-    if (err.name === 'TokenExpiredError') {
-      return next(new ForbiddenError('Token expired. Please login again.'));
-    }
-    if (err.name === 'JsonWebTokenError') {
-      return next(new ForbiddenError('Invalid token.'));
-    }
-    return next(new ForbiddenError('Invalid or expired token.'));
-  }
-};
-
-/**
- * Hybrid authentication (supports both Supabase and Legacy)
- * Use during migration period only
- */
-const authenticateHybrid = async (req, res, next) => {
-  const token = extractToken(req);
-  
-  if (!token) {
-    return next(new UnauthorizedError('Access denied. No token provided.'));
-  }
-  
-  // Try Supabase first (preferred)
-  try {
-    const { data: { user }, error } = await supabase.auth.getUser(token);
-    
-    if (!error && user) {
-      const profile = await loadUserProfile(user.id, token);
-      
-      req.user = {
-        id: profile.id,
-        email: user.email,
-        role: profile.role,
-        agency_id: profile.agency_id,
-        status: profile.status,
-        full_name: profile.full_name,
-        badge_number: profile.badge_number,
-        agency: profile.agencies,
-        permissions: getRolePermissions(profile.role)
-      };
-      req.token = token;
-      req.authType = 'supabase';
-      
-      userRepository.updateLastActive(profile.id).catch(console.error);
-      return next();
-    }
-  } catch (supabaseError) {
-    // Fall through to legacy
-  }
-  
-  // Fall back to legacy JWT
-  return authenticateLegacy(req, res, next);
-};
-
 // ============================================
 // AUTHORIZATION MIDDLEWARE
 // ============================================
 
 /**
  * Require specific resource permission
- * @param {string} permission - Resource permission (e.g., 'user:create', 'incident:read')
  */
 const requirePermission = (permission) => {
   return (req, res, next) => {
@@ -394,7 +292,6 @@ const requireSuperAdmin = (req, res, next) => {
 
 /**
  * Require specific role
- * @param {string|string[]} roles - Required role(s)
  */
 const requireRole = (roles) => {
   const roleList = Array.isArray(roles) ? roles : [roles];
@@ -416,7 +313,6 @@ const requireRole = (roles) => {
 
 /**
  * Check action permission (backward compatible)
- * @param {string} action - Action permission (canCreate, canUpdate, canDelete)
  */
 const checkPermission = (action) => {
   return (req, res, next) => {
@@ -435,8 +331,7 @@ const checkPermission = (action) => {
 };
 
 /**
- * Require agency scoping (user can only access their own agency)
- * Sets req.agencyScope for use in controllers
+ * Require agency scoping
  */
 const requireAgencyScope = (req, res, next) => {
   if (!req.user) {
@@ -445,11 +340,11 @@ const requireAgencyScope = (req, res, next) => {
   
   // Super admins can access all agencies
   if (canCrossAgency(req.user.role)) {
-    req.agencyScope = null; // No scoping
+    req.agencyScope = null;
     return next();
   }
   
-  // Citizens don't have agency assignment - they see their own reports
+  // Citizens don't have agency assignment
   if (req.user.role === 'citizen') {
     req.agencyScope = null;
     req.isCitizen = true;
@@ -467,7 +362,6 @@ const requireAgencyScope = (req, res, next) => {
 
 /**
  * Validate user can manage target user
- * Use for user management endpoints
  */
 const canManageUser = (req, res, next) => {
   const targetUserId = req.params.id || req.body.user_id;
@@ -476,7 +370,7 @@ const canManageUser = (req, res, next) => {
     return next(new UnauthorizedError('Authentication required.'));
   }
   
-  // Self-management is always allowed for some extent
+  // Self-management is always allowed
   if (targetUserId === req.user.id) {
     req.isSelfEdit = true;
     return next();
@@ -510,7 +404,7 @@ const canManageUser = (req, res, next) => {
 };
 
 /**
- * Optional authentication - attaches user if token present, but doesn't require it
+ * Optional authentication - attaches user if token present
  */
 const optionalAuth = async (req, res, next) => {
   const token = extractToken(req);
@@ -558,7 +452,6 @@ const logout = async (req, res, next) => {
       blacklistToken(req.token, req.user.id);
     }
     
-    // Log audit
     await auditRepository.log({
       userId: req.user?.id,
       action: 'logout',
@@ -596,23 +489,11 @@ const logoutAll = async (req, res, next) => {
   }
 };
 
-// ============================================
-// LEGACY EXPORTS (backward compatibility)
-// ============================================
-const authenticateSupabaseToken = authenticate;
-const authenticateLegacyToken = authenticateLegacy;
-
 module.exports = {
-  // Primary authentication
+  // Authentication
   authenticate,
   authenticateWithRefresh,
   optionalAuth,
-  
-  // Legacy authentication (deprecated)
-  authenticateLegacy,
-  authenticateHybrid,
-  authenticateSupabaseToken,
-  authenticateLegacyToken,
   
   // Authorization
   requirePermission,
@@ -631,7 +512,7 @@ module.exports = {
   // Utilities
   extractToken,
   
-  // Export supabase clients for backward compatibility
+  // Supabase clients
   supabase,
   supabaseAdmin
 };

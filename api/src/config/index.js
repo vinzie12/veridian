@@ -44,7 +44,6 @@ module.exports = {
   // Environment
   env: {
     nodeEnv: process.env.NODE_ENV || 'development',
-    jwtSecret: process.env.JWT_SECRET,
     corsOrigins: parseCorsOrigins(),
     apiUrl: process.env.API_URL,
     inviteRedirectUrl: process.env.INVITE_REDIRECT_URL,

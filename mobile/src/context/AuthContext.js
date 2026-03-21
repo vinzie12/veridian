@@ -60,36 +60,45 @@ export const AuthProvider = ({ children }) => {
   useEffect(() => {
     const initializeAuth = async () => {
       try {
-        const [storedToken, storedUser] = await Promise.all([
+        const [storedToken, storedRefreshToken, storedUser] = await Promise.all([
           getToken(),
+          getRefreshToken(),
           getUser(),
         ]);
 
-        if (storedToken && storedUser) {
-          setTokenState(storedToken);
-          setUserState(storedUser);
-          
+        // Only consider authenticated if BOTH token AND valid user exist
+        if (storedToken && storedUser && storedUser.id && storedUser.email) {
           // Verify token is still valid by fetching fresh user data
           try {
             const freshUser = await authService.getCurrentUser();
+            
+            // Ensure we got a valid user back
+            if (!freshUser || !freshUser.id) {
+              throw new Error('Invalid user response');
+            }
+            
+            setTokenState(storedToken);
             setUserState(freshUser);
             await setUser(freshUser);
           } catch (err) {
-            // Token might be expired or refresh token already used
-            // Clear ALL auth data including stale refresh tokens
+            // Token is invalid/expired/revoked - clear ALL auth data
             log.warn('Token validation failed, clearing auth:', err.message);
             await clearAuth();
+            await clearApiClientAuth();
             setTokenState(null);
             setUserState(null);
           }
         } else {
-          // No stored credentials - make sure storage is clean
+          // No valid stored credentials - make sure storage is clean
+          log.info('No valid stored credentials, clearing auth');
           await clearAuth();
+          await clearApiClientAuth();
         }
       } catch (err) {
         log.error('Auth initialization failed:', err);
         // Ensure clean state on any error
         await clearAuth();
+        await clearApiClientAuth();
         setTokenState(null);
         setUserState(null);
       } finally {

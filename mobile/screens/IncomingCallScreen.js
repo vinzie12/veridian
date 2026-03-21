@@ -261,7 +261,7 @@ export default function IncomingCallScreen({ route, navigation }) {
         {/* Incident Info */}
         <View style={styles.incidentCard}>
           <Text style={styles.incidentLabel}>INCIDENT</Text>
-          <Text style={styles.incidentId}>#{callSession.incident_id?.slice(0, 8).toUpperCase()}</Text>
+          <Text style={styles.incidentId}>#{callSession.incident_id?.slice(0, 8)?.toUpperCase()}</Text>
         </View>
 
         {/* Action Buttons */}

@@ -100,6 +100,20 @@ class IncidentController {
   });
 
   /**
+   * Update incident status
+   */
+  updateIncidentStatus = asyncHandler(async (req, res) => {
+    const incident = await incidentService.updateIncidentStatus(
+      req.params.id,
+      req.body.status,
+      req.user,
+      { ip: req.ip, userAgent: req.headers['user-agent'] }
+    );
+    
+    res.json(updated('Incident status updated successfully', { incident }));
+  });
+
+  /**
    * Delete incident
    */
   deleteIncident = asyncHandler(async (req, res) => {

@@ -69,6 +69,12 @@ class IncidentService {
       throw new NotFoundError('Incident not found');
     }
 
+    console.log('[IncidentService] Fetched incident:', {
+      id: incident.id?.slice(0, 8),
+      reporterId: incident.reporter_id?.slice(0, 8),
+      reporterName: incident.reporter_name
+    });
+
     // Check access
     const crossAgency = canCrossAgency(user.role);
     const hasAccess = incident.agency_id === user.agency_id ||
@@ -91,6 +97,12 @@ class IncidentService {
    */
   async createIncident(data, user, context = {}) {
     const { incident_type_id, severity, latitude, longitude, address, description, extra_fields } = data;
+
+    console.log('[IncidentService] Creating incident:', {
+      userId: user?.id?.slice(0, 8),
+      role: user?.role,
+      agencyId: user?.agency_id?.slice(0, 8)
+    });
 
     if (!incident_type_id || !severity) {
       throw new ValidationError('incident_type_id and severity are required');
@@ -238,6 +250,56 @@ class IncidentService {
       resourceType: 'incident',
       resourceId: id,
       details: { status, updates: Object.keys(data) },
+      ipAddress: context.ip,
+      userAgent: context.userAgent
+    });
+
+    return updated;
+  }
+
+  /**
+   * Update incident status
+   * @param {string} id - Incident ID
+   * @param {string} status - New status
+   * @param {object} user - Current user
+   * @param {object} context - Request context
+   * @returns {object} Updated incident
+   */
+  async updateIncidentStatus(id, status, user, context = {}) {
+    // Get incident first
+    const incident = await incidentRepository.findById(id);
+    
+    if (!incident) {
+      throw new NotFoundError('Incident not found');
+    }
+
+    // Check access - only non-citizens can update status
+    if (user.role === 'citizen') {
+      throw new ForbiddenError('Citizens cannot update incident status');
+    }
+
+    const crossAgency = canCrossAgency(user.role);
+    const hasAccess = incident.agency_id === user.agency_id ||
+                      incident.agency_id === null ||
+                      crossAgency;
+
+    if (!hasAccess) {
+      throw new ForbiddenError('Access denied to this incident');
+    }
+
+    // Update status
+    const updated = await incidentRepository.updateById(id, {
+      status,
+      updated_at: new Date().toISOString()
+    });
+
+    // Log audit
+    await auditRepository.log({
+      userId: user.id,
+      action: 'update_incident_status',
+      resourceType: 'incident',
+      resourceId: id,
+      details: { previousStatus: incident.status, newStatus: status },
       ipAddress: context.ip,
       userAgent: context.userAgent
     });

@@ -145,11 +145,12 @@ export const setupNotificationListeners = (onNotification, onResponse) => {
 
 // Remove notification listeners
 export const removeNotificationListeners = (subscriptions) => {
-  if (subscriptions?.received) {
-    Notifications.removeNotificationSubscription(subscriptions.received);
+  // In newer expo-notifications, subscriptions have a remove() method
+  if (subscriptions?.received?.remove) {
+    subscriptions.received.remove();
   }
-  if (subscriptions?.response) {
-    Notifications.removeNotificationSubscription(subscriptions.response);
+  if (subscriptions?.response?.remove) {
+    subscriptions.response.remove();
   }
 };
 

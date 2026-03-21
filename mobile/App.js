@@ -8,9 +8,10 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { AuthProvider, useAuth } from './src/context/AuthContext';
-import { RootNavigator, setNavigationRef } from './src/navigation';
+import { RootNavigator, navigate as navNavigate } from './src/navigation';
 import { FullScreenLoading } from './src/components/common';
 import { configService, setApiBaseUrl, getApiBaseUrl } from './src/services/apiClient';
+import { apiRequest } from './src/services/apiClient';
 
 // Import existing services
 import { loadSupabaseConfig, supabase, clearStaleTokens } from './lib/supabase';
@@ -84,37 +85,61 @@ function AppContent() {
   const { user } = useAuth();
   const incomingCallSubscription = useRef(null);
   const notificationSubscriptions = useRef(null);
-  const navigationRef = useRef(null);
+  const pollingIntervalRef = useRef(null);
+  const lastIncomingCallIdRef = useRef(null);
 
   useEffect(() => {
-    if (user?.id && navigationRef.current) {
+    // FIXED: removed navigationRef.current guard — it was always null
+    if (user?.id) {
       setupRealtimeSubscriptions();
     }
-
     return () => {
       cleanupSubscriptions();
     };
   }, [user?.id]);
 
+  const startIncomingCallPolling = () => {
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+    }
+    pollingIntervalRef.current = setInterval(async () => {
+      try {
+        console.log('[App] Polling for incoming calls, user:', user?.id?.slice(0, 8));
+        const res = await apiRequest('/call/incoming', { method: 'GET' });
+        const callSession = res?.data?.callSession;
+        console.log('[App] Poll result:', callSession ? { id: callSession.id?.slice(0, 8), caller: callSession.caller_name } : null);
+        if (!callSession?.id) return;
+        if (lastIncomingCallIdRef.current === callSession.id) return;
+        lastIncomingCallIdRef.current = callSession.id;
+        console.log('[App] Navigating to IncomingCall screen');
+        // FIXED: use navNavigate instead of navigationRef.current.navigate
+        navNavigate('IncomingCall', { callSessionId: callSession.id, user });
+      } catch (err) {
+        console.log('[App] Poll error:', err?.message);
+      }
+    }, 2500);
+  };
+
   const setupRealtimeSubscriptions = async () => {
     try {
-      // Incoming calls
+      // Incoming calls via Supabase realtime
       incomingCallSubscription.current = subscribeToIncomingCalls(
         user.id,
         (callSession) => {
           console.log('[App] Incoming call:', callSession);
-          if (navigationRef.current) {
-            navigationRef.current.navigate('IncomingCall', {
-              callSessionId: callSession.id,
-              user,
-            });
-          }
+          // FIXED: use navNavigate instead of navigationRef.current.navigate
+          navNavigate('IncomingCall', { callSessionId: callSession.id, user });
         }
       );
 
+      // Polling fallback - only for users who can receive calls (citizens/reporters)
+      if (user.role === 'citizen' || user.role === 'reporter') {
+        startIncomingCallPolling();
+      }
+
       // Push notifications
       await registerForPushNotifications(user.id);
-      
+
       notificationSubscriptions.current = setupNotificationListeners(
         (notification) => {
           const data = notification.request.content.data;
@@ -125,12 +150,7 @@ function AppContent() {
         (response) => {
           const data = response.notification.request.content.data;
           if (data?.type === 'incoming_call' && data?.callSessionId) {
-            if (navigationRef.current) {
-              navigationRef.current.navigate('IncomingCall', {
-                callSessionId: data.callSessionId,
-                user,
-              });
-            }
+            navNavigate('IncomingCall', { callSessionId: data.callSessionId, user });
           }
         }
       );
@@ -143,17 +163,16 @@ function AppContent() {
     if (incomingCallSubscription.current) {
       incomingCallSubscription.current.unsubscribe();
     }
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+    }
+    lastIncomingCallIdRef.current = null;
     if (notificationSubscriptions.current) {
       removeNotificationListeners(notificationSubscriptions.current);
     }
   };
 
-  return (
-    <RootNavigator
-      ref={(ref) => {
-        navigationRef.current = ref;
-        setNavigationRef(ref);
-      }}
-    />
-  );
+  // FIXED: no ref needed on RootNavigator since we use navNavigate
+  return <RootNavigator />;
 }

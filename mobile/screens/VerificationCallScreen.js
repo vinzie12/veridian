@@ -141,11 +141,11 @@ export default function VerificationCallScreen({ route, navigation }) {
 
         <View style={styles.infoCard}>
           <Text style={styles.infoLabel}>INCIDENT</Text>
-          <Text style={styles.infoValue}>#{incidentId?.slice(0, 8).toUpperCase()}</Text>
+          <Text style={styles.infoValue}>#{incidentId?.slice(0, 8)?.toUpperCase()}</Text>
         </View>
 
         <View style={styles.infoCard}>
-          <Text style={styles.infoLabel}>YOUR ROLE</Text>
+          <Text style={styles.infoLabel}>CALL MODE</Text>
           <Text style={styles.infoValue}>{isHost ? 'Host (Admin)' : 'Guest (Reporter)'}</Text>
         </View>
 

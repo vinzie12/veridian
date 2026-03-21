@@ -1,48 +1,17 @@
 /**
  * In-App Audio Call Provider
  * WebSocket-based real-time audio streaming
- * Uses expo-av for recording/playback
- * 
- * NOTE: This is NOT WebRTC - it's a simple audio streaming solution
- * For true WebRTC, native dependencies would be required
- * 
- * Architecture:
- * - Backend WebSocket server handles signaling
- * - Audio chunks streamed via WebSocket
- * - expo-av handles recording and playback
+ * Uses expo-av + expo-file-system for chunked audio recording/playback
  */
 
-import { Audio } from 'expo-av';
+import { Audio, InterruptionModeIOS, InterruptionModeAndroid } from 'expo-av';
+import * as FileSystem from 'expo-file-system';
 
-// WebSocket server URL (your backend)
-const WS_URL = 'ws://192.168.254.104:3001'; // TODO: Move to config
+// WebSocket server URL — same port as your API
+const WS_URL = 'ws://192.168.254.104:3000';
 
-// Audio configuration
-const AUDIO_CONFIG = {
-  android: {
-    extension: '.m4a',
-    outputFormat: Audio.RECORDING_OPTION_ANDROID_OUTPUT_FORMAT_MPEG_4,
-    audioEncoder: Audio.RECORDING_OPTION_ANDROID_AUDIO_ENCODER_AAC,
-    sampleRate: 16000,
-    numberOfChannels: 1,
-    bitRate: 64000,
-  },
-  ios: {
-    extension: '.m4a',
-    outputFormat: Audio.RECORDING_OPTION_IOS_OUTPUT_FORMAT_MPEG4AAC,
-    audioQuality: Audio.RECORDING_OPTION_IOS_AUDIO_QUALITY_MEDIUM,
-    sampleRate: 16000,
-    numberOfChannels: 1,
-    bitRate: 64000,
-    linearPCMBitDepth: 16,
-    linearPCMIsBigEndian: false,
-    linearPCMIsFloat: false,
-  },
-  web: {
-    extension: '.webm',
-    mimeType: 'audio/webm',
-  },
-};
+// How long each audio chunk is (ms). Lower = less latency, more overhead.
+const CHUNK_DURATION_MS = 500;
 
 // Audio mode configuration for calls
 export const configureAudioMode = async () => {
@@ -53,9 +22,8 @@ export const configureAudioMode = async () => {
       staysActiveInBackground: true,
       shouldDuckAndroid: true,
       playThroughEarpieceAndroid: true,
-      // For in-app calls
-      interruptionModeIOS: Audio.INTERRUPTION_MODE_IOS_DO_NOT_MIX,
-      interruptionModeAndroid: Audio.INTERRUPTION_MODE_ANDROID_DO_NOT_MIX,
+      interruptionModeIOS: InterruptionModeIOS.DoNotMix,
+      interruptionModeAndroid: InterruptionModeAndroid.DoNotMix,
     });
     return true;
   } catch (error) {
@@ -64,194 +32,248 @@ export const configureAudioMode = async () => {
   }
 };
 
-// Create audio call connection
 export class InAppCallConnection {
   constructor(roomName, userId, displayName) {
     this.roomName = roomName;
     this.userId = userId;
     this.displayName = displayName;
     this.ws = null;
-    this.recording = null;
-    this.sound = null;
     this.isMuted = false;
     this.isConnected = false;
+    this.streamingTimeout = null;
+    this.isStreaming = false;
+
+    // Callbacks — set by InAppCallScreen
     this.onStatusChange = null;
     this.onParticipantJoined = null;
     this.onParticipantLeft = null;
     this.onError = null;
   }
 
-  // Connect to signaling server
+  // ── CONNECT ────────────────────────────────────────────────────────────
   async connect() {
     return new Promise((resolve, reject) => {
       try {
-        this.ws = new WebSocket(`${WS_URL}/call/${this.roomName}?userId=${this.userId}&name=${encodeURIComponent(this.displayName)}`);
-        
+        this.ws = new WebSocket(
+          `${WS_URL}/call/${this.roomName}?userId=${this.userId}&name=${encodeURIComponent(this.displayName)}` 
+        );
+
         this.ws.onopen = () => {
-          console.log('In-app call: WebSocket connected');
+          console.log('[InAppCall] WebSocket connected');
           this.isConnected = true;
           if (this.onStatusChange) this.onStatusChange('connected');
           resolve(true);
         };
-        
+
         this.ws.onmessage = async (event) => {
           try {
             const data = JSON.parse(event.data);
             await this.handleMessage(data);
           } catch (err) {
-            console.error('Failed to handle message:', err);
+            console.error('[InAppCall] Failed to handle message:', err);
           }
         };
-        
+
         this.ws.onerror = (error) => {
-          console.error('WebSocket error:', error);
+          console.error('[InAppCall] WebSocket error:', error);
           if (this.onError) this.onError(error);
           reject(error);
         };
-        
+
         this.ws.onclose = () => {
-          console.log('WebSocket closed');
+          console.log('[InAppCall] WebSocket closed');
           this.isConnected = false;
           if (this.onStatusChange) this.onStatusChange('disconnected');
         };
-        
       } catch (error) {
         reject(error);
       }
     });
   }
 
-  // Handle incoming messages
+  // ── HANDLE INCOMING MESSAGES ───────────────────────────────────────────
   async handleMessage(data) {
     switch (data.type) {
       case 'participant_joined':
-        console.log('Participant joined:', data.userId);
+        console.log('[InAppCall] Participant joined:', data.userId);
         if (this.onParticipantJoined) this.onParticipantJoined(data);
         break;
-        
+
       case 'participant_left':
-        console.log('Participant left:', data.userId);
+        console.log('[InAppCall] Participant left:', data.userId);
         if (this.onParticipantLeft) this.onParticipantLeft(data);
         break;
-        
+
       case 'audio_chunk':
-        // Play incoming audio
         await this.playAudioChunk(data.audio);
         break;
-        
+
       case 'user_muted':
-        console.log('Remote user muted:', data.userId);
+        console.log('[InAppCall] Remote muted:', data.userId);
         break;
-        
+
       case 'user_unmuted':
-        console.log('Remote user unmuted:', data.userId);
+        console.log('[InAppCall] Remote unmuted:', data.userId);
         break;
-        
+
       default:
-        console.log('Unknown message type:', data.type);
+        console.log('[InAppCall] Unknown message type:', data.type);
     }
   }
 
-  // Start audio recording and streaming
+  // ── AUDIO STREAMING (chunked record → base64 → WebSocket) ─────────────
   async startStreaming() {
     try {
-      // Request permission
       const { status } = await Audio.requestPermissionsAsync();
       if (status !== 'granted') {
-        throw new Error('Audio permission not granted');
+        throw new Error('Microphone permission not granted');
       }
-      
-      // Configure audio mode
+
       await configureAudioMode();
-      
-      // Create recording
-      this.recording = new Audio.Recording();
-      await this.recording.prepareToRecordAsync(AUDIO_CONFIG);
-      
-      // Start recording
-      await this.recording.startAsync();
-      
-      // Set up interval to send audio chunks
-      this.streamingInterval = setInterval(async () => {
-        if (this.isMuted || !this.isConnected) return;
-        
-        try {
-          // Get audio data and send
-          // Note: expo-av doesn't support real-time chunk streaming natively
-          // This is a simplified version - production would need native module
-          // or a different approach (e.g., react-native-audio-api)
-          console.log('Streaming audio...');
-        } catch (err) {
-          console.error('Error streaming audio:', err);
-        }
-      }, 100); // 100ms chunks
-      
-      console.log('Started audio streaming');
+      this.isStreaming = true;
+
+      console.log('[InAppCall] Audio streaming started');
+      this._recordNextChunk();
       return true;
     } catch (error) {
-      console.error('Failed to start streaming:', error);
+      console.error('[InAppCall] Failed to start streaming:', error);
       throw error;
     }
   }
 
-  // Stop streaming
+  _recordNextChunk() {
+    if (!this.isStreaming || !this.isConnected) return;
+
+    // Schedule the next chunk recording
+    this.streamingTimeout = setTimeout(async () => {
+      if (!this.isStreaming || !this.isConnected) return;
+
+      let recording = null;
+      let uri = null;
+
+      try {
+        // 1. Start recording this chunk
+        const result = await Audio.Recording.createAsync(
+          Audio.RecordingOptionsPresets.LOW_QUALITY
+        );
+        recording = result.recording;
+
+        // 2. Wait for chunk duration
+        await new Promise(resolve => setTimeout(resolve, CHUNK_DURATION_MS));
+
+        // 3. Stop and get the file
+        await recording.stopAndUnloadAsync();
+        uri = recording.getURI();
+
+        // 4. Only send if not muted and still connected
+        if (!this.isMuted && this.isConnected && uri) {
+          const base64 = await FileSystem.readAsStringAsync(uri, {
+            encoding: FileSystem.EncodingType.Base64,
+          });
+
+          if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({
+              type: 'audio_chunk',
+              audio: base64,
+              userId: this.userId,
+            }));
+          }
+        }
+      } catch (err) {
+        // Don't crash the whole stream on a single failed chunk
+        console.warn('[InAppCall] Chunk error:', err.message);
+        if (recording) {
+          try { await recording.stopAndUnloadAsync(); } catch (_) {}
+        }
+      } finally {
+        // 5. Clean up temp file
+        if (uri) {
+          FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
+        }
+
+        // 6. Schedule next chunk
+        this._recordNextChunk();
+      }
+    }, 0); // Start immediately, chunk duration is handled inside
+  }
+
+  // ── PLAY INCOMING AUDIO CHUNK ──────────────────────────────────────────
+  async playAudioChunk(base64Audio) {
+    if (!base64Audio) return;
+
+    let uri = null;
+    let sound = null;
+
+    try {
+      // Write base64 audio to a temp file
+      uri = `${FileSystem.cacheDirectory}chunk_${Date.now()}_${Math.random().toString(36).slice(2)}.m4a`;
+      await FileSystem.writeAsStringAsync(uri, base64Audio, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      // Play the temp file
+      const result = await Audio.Sound.createAsync(
+        { uri },
+        { shouldPlay: true, volume: 1.0 }
+      );
+      sound = result.sound;
+
+      // Clean up after playback finishes
+      sound.setOnPlaybackStatusUpdate((status) => {
+        if (status.didJustFinish || status.error) {
+          sound.unloadAsync().catch(() => {});
+          FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
+        }
+      });
+    } catch (error) {
+      console.warn('[InAppCall] Failed to play audio chunk:', error.message);
+      if (sound) sound.unloadAsync().catch(() => {});
+      if (uri) FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
+    }
+  }
+
+  // ── STOP STREAMING ─────────────────────────────────────────────────────
   async stopStreaming() {
-    try {
-      if (this.streamingInterval) {
-        clearInterval(this.streamingInterval);
-        this.streamingInterval = null;
-      }
-      
-      if (this.recording) {
-        await this.recording.stopAndUnloadAsync();
-        this.recording = null;
-      }
-      
-      console.log('Stopped audio streaming');
-    } catch (error) {
-      console.error('Failed to stop streaming:', error);
+    this.isStreaming = false;
+
+    if (this.streamingTimeout) {
+      clearTimeout(this.streamingTimeout);
+      this.streamingTimeout = null;
     }
+
+    console.log('[InAppCall] Audio streaming stopped');
   }
 
-  // Play incoming audio chunk
-  async playAudioChunk(audioData) {
-    try {
-      // In a real implementation, audioData would be base64 audio
-      // We'd decode and play it
-      // expo-av Sound objects can play from URI or base64
-      console.log('Playing audio chunk');
-    } catch (error) {
-      console.error('Failed to play audio:', error);
-    }
-  }
-
-  // Toggle mute
+  // ── MUTE ───────────────────────────────────────────────────────────────
   async setMuted(muted) {
     this.isMuted = muted;
-    
-    // Notify other participants
+
     if (this.ws && this.isConnected) {
       this.ws.send(JSON.stringify({
         type: muted ? 'mute' : 'unmute',
         userId: this.userId,
       }));
     }
-    
+
     return true;
   }
 
-  // End call
+  // ── END CALL ───────────────────────────────────────────────────────────
   async end() {
     await this.stopStreaming();
-    
+
     if (this.ws) {
-      this.ws.send(JSON.stringify({ type: 'leave', userId: this.userId }));
+      try {
+        if (this.ws.readyState === WebSocket.OPEN) {
+          this.ws.send(JSON.stringify({ type: 'leave', userId: this.userId }));
+        }
+      } catch (_) {}
       this.ws.close();
       this.ws = null;
     }
-    
+
     this.isConnected = false;
-    console.log('Call ended');
+    console.log('[InAppCall] Call ended');
   }
 }
 

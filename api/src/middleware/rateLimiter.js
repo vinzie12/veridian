@@ -5,13 +5,16 @@
 
 const rateLimit = require('express-rate-limit');
 
+// Check if in development/testing mode
+const isDev = process.env.NODE_ENV !== 'production';
+
 /**
  * Strict limiter for authentication endpoints
- * 5 attempts per 15 minutes per IP
+ * 5 attempts per 15 minutes per IP (disabled in dev)
  */
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // 5 attempts per window
+  max: isDev ? 1000 : 5, // Much higher in dev for testing
   message: { 
     error: 'Too many authentication attempts. Please try again later.', 
     code: 'RATE_LIMITED' 
@@ -29,11 +32,11 @@ const authLimiter = rateLimit({
 
 /**
  * Moderate limiter for password reset and OTP
- * 3 attempts per 15 minutes
+ * 3 attempts per 15 minutes (disabled in dev)
  */
 const sensitiveLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 3,
+  max: isDev ? 1000 : 3,
   message: {
     error: 'Too many attempts. Please try again later.',
     code: 'RATE_LIMITED'
@@ -74,11 +77,11 @@ const publicLimiter = rateLimit({
 
 /**
  * Create account limiter
- * 3 account creations per hour per IP
+ * 3 account creations per hour per IP (disabled in dev)
  */
 const createAccountLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 3,
+  max: isDev ? 1000 : 3,
   standardHeaders: true,
   legacyHeaders: false,
   message: {

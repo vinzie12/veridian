@@ -303,7 +303,7 @@ export default function QuickReportScreen({ navigation }) {
     setSubmitting(true);
 
     try {
-      const payload = {
+      const basePayload = {
         incident_type_id: incidentType,
         severity,
         latitude: incidentLocation.latitude,
@@ -313,11 +313,28 @@ export default function QuickReportScreen({ navigation }) {
         ...(isAnonymous && { reporter_contact: reporterContact || null })
       };
 
+      console.log('[QuickReport] Submitting incident:', {
+        isAnonymous,
+        isLoggedIn,
+        userId: user?.id?.slice(0, 8),
+        userRole: user?.role
+      });
+
       let response;
       if (isAnonymous) {
-        response = await incidentService.createPublic(payload);
+        // For anonymous reports, don't send reporter info
+        response = await incidentService.createPublic({
+          ...basePayload,
+          anonymous: true
+        });
       } else {
-        response = await incidentService.create(payload);
+        // For authenticated users, include reporter info
+        response = await incidentService.create({
+          ...basePayload,
+          reporter_id: user?.id,
+          reporter_name: user?.full_name,
+          anonymous: false
+        });
       }
 
       const incident = response?.data?.incident || response?.incident || response?.data;

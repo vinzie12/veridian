@@ -10,6 +10,7 @@ const { supabaseAdmin } = require('./src/config/supabase');
 const logger = require('./src/utils/logger');
 const { checkEnvOrExit } = require('./src/utils/envValidator');
 const { setupErrorLogging, setupShutdownLogging, logStartup, logDatabaseConnection } = require('./src/middleware/requestLogger');
+const { setupWebSocket } = require('./src/services/websocket.service');
 
 const PORT = process.env.PORT || 3000;
 
@@ -53,6 +54,9 @@ const startServer = async () => {
       env: process.env.NODE_ENV || 'development'
     });
   });
+  
+  // Setup WebSocket server for in-app calls
+  setupWebSocket(server);
   
   // Setup graceful shutdown logging
   setupShutdownLogging(server);

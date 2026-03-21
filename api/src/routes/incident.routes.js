@@ -10,6 +10,7 @@ const {
   createIncidentSchema, 
   createPublicIncidentSchema, 
   updateIncidentSchema, 
+  updateStatusSchema,
   incidentIdParamsSchema,
   trackingIdParamsSchema,
   incidentsQuerySchema
@@ -45,6 +46,9 @@ router.post('/', requirePermission('incident:create'), validateBody(createIncide
 
 // Update incident
 router.patch('/:id', validateParams(incidentIdParamsSchema), requirePermission('incident:update'), validateBody(updateIncidentSchema), incidentController.updateIncident);
+
+// Update incident status (dedicated endpoint)
+router.patch('/:id/status', validateParams(incidentIdParamsSchema), requirePermission('incident:update'), validateBody(updateStatusSchema), incidentController.updateIncidentStatus);
 
 // Delete incident
 router.delete('/:id', validateParams(incidentIdParamsSchema), requirePermission('incident:delete'), incidentController.deleteIncident);

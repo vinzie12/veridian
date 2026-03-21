@@ -92,6 +92,10 @@ const updateIncidentSchema = z.object({
   message: 'At least one field must be provided'
 });
 
+const updateStatusSchema = z.object({
+  status: incidentStatusEnum
+});
+
 // Legacy tracking ID schema (for backward compatibility)
 const trackingIdSchema = trackingIdParamsSchema;
 
@@ -111,6 +115,7 @@ module.exports = {
   createIncidentSchema,
   createPublicIncidentSchema,
   updateIncidentSchema,
+  updateStatusSchema,
   extraFieldsSchema,
   
   // Legacy

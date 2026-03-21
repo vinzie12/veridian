@@ -20,7 +20,7 @@ import {
 import { InAppCallConnection, configureAudioMode } from '../lib/callProviders/inAppProvider';
 
 export default function InAppCallScreen({ route, navigation }) {
-  const { callSessionId, isCaller, connection: existingConnection } = route.params;
+  const { callSessionId, callSession: initialCallSession, isCaller, connection: existingConnection } = route.params;
   const { user } = useAuth();
   
   const [callSession, setCallSession] = useState(null);
@@ -32,10 +32,11 @@ export default function InAppCallScreen({ route, navigation }) {
   const connectionRef = useRef(existingConnection || null);
   const subscriptionRef = useRef(null);
   const durationTimerRef = useRef(null);
+  const waitingPollRef = useRef(null);      // ← NEW: polling ref
+  const isConnectingRef = useRef(false);    // ← NEW: prevent double-connect
 
   useEffect(() => {
     initializeCall();
-    
     return () => {
       cleanup();
     };
@@ -47,30 +48,99 @@ export default function InAppCallScreen({ route, navigation }) {
         setDuration(prev => prev + 1);
       }, 1000);
     }
-    
     return () => {
       if (durationTimerRef.current) clearInterval(durationTimerRef.current);
     };
   }, [callStatus]);
 
+  // ── CALLBACKS — always applied regardless of where connection came from ─
+  // KEY FIX: extracted into its own function so it can be called on
+  // BOTH newly created connections AND existing ones passed from IncomingCallScreen.
+  const applyConnectionCallbacks = (connection) => {
+    connection.onStatusChange = (status) => {
+      setCallStatus(status);
+    };
+    connection.onParticipantJoined = () => {
+      console.log('[InAppCallScreen] Remote participant joined');
+    };
+    // KEY FIX: this was never being set on the citizen's existing connection,
+    // so when the admin left, the citizen received participant_left over WebSocket
+    // but had no handler — screen stayed frozen.
+    connection.onParticipantLeft = () => {
+      Alert.alert('Participant Left', 'The other participant left the call');
+      cleanup();
+      navigation.goBack();
+    };
+    connection.onError = () => {
+      Alert.alert('Call Error', 'Connection failed');
+    };
+  };
+
+  // ── POLL while admin is waiting for citizen to accept ─────────────────
+  const startWaitingPoll = (session) => {
+    if (waitingPollRef.current) clearInterval(waitingPollRef.current);
+
+    console.log('[InAppCall] Starting waiting poll for session:', session.id?.slice(0, 8));
+
+    waitingPollRef.current = setInterval(async () => {
+      try {
+        const result = await getCallSession(session.id);
+        const updated = result?.callSession;
+        if (!updated) return;
+
+        console.log('[InAppCall] Poll result - status:', updated.status);
+
+        setCallSession(updated);
+
+        if (updated.status === CALL_STATUS.ACCEPTED) {
+          stopWaitingPoll();
+          await connectToCall(updated);
+        } else if (
+          updated.status === CALL_STATUS.DECLINED ||
+          updated.status === CALL_STATUS.MISSED ||
+          updated.status === CALL_STATUS.ENDED ||
+          updated.status === CALL_STATUS.CANCELLED
+        ) {
+          stopWaitingPoll();
+        }
+      } catch (err) {
+        console.log('[InAppCall] Poll error:', err?.message);
+      }
+    }, 2500);
+  };
+
+  const stopWaitingPoll = () => {
+    if (waitingPollRef.current) {
+      clearInterval(waitingPollRef.current);
+      waitingPollRef.current = null;
+      console.log('[InAppCall] Waiting poll stopped');
+    }
+  };
+  // ────────────────────────────────────────────────────────────────────────
+
   const initializeCall = async () => {
     try {
-      // Load call session
-      const result = await getCallSession(callSessionId);
-      if (!result.success) {
+      const session = initialCallSession
+        ? initialCallSession
+        : (await getCallSession(callSessionId)).callSession;
+
+      if (!session) {
         Alert.alert('Error', 'Call not found');
         navigation.goBack();
         return;
       }
-      
-      const session = result.callSession;
+
       setCallSession(session);
       
-      // Subscribe to updates
+      // Realtime subscription (best effort — polling is the reliable fallback)
       subscriptionRef.current = subscribeToCallUpdates(session.id, (updated) => {
+        console.log('[InAppCall] Realtime update - status:', updated.status);
         setCallSession(updated);
         
-        if (updated.status === CALL_STATUS.ENDED) {
+        if (updated.status === CALL_STATUS.ACCEPTED && isCaller) {
+          stopWaitingPoll(); // Realtime fired first — stop polling
+          connectToCall(updated);
+        } else if (updated.status === CALL_STATUS.ENDED) {
           handleCallEnded();
         } else if (updated.status === CALL_STATUS.DECLINED) {
           handleCallDeclined();
@@ -79,15 +149,16 @@ export default function InAppCallScreen({ route, navigation }) {
         }
       });
       
-      // If already accepted, connect
+      // If already accepted, connect immediately
       if (session.status === CALL_STATUS.ACCEPTED) {
         await connectToCall(session);
       } else if (isCaller) {
-        // Caller waits for acceptance
+        // Admin waits — start BOTH Realtime (above) and polling fallback
         setCallStatus('waiting');
         setLoading(false);
+        startWaitingPoll(session); // ← KEY FIX: polling fallback
       } else {
-        // Callee should have accepted already
+        // Citizen side — should already be accepted
         await connectToCall(session);
       }
     } catch (error) {
@@ -98,38 +169,39 @@ export default function InAppCallScreen({ route, navigation }) {
   };
 
   const connectToCall = async (session) => {
+    // Already connected (citizen's existing connection from IncomingCallScreen).
+    // MUST still apply callbacks — they were never set on this connection object.
+    if (connectionRef.current?.isConnected) {
+      applyConnectionCallbacks(connectionRef.current);
+      setCallStatus('connected');
+      setLoading(false);
+      return;
+    }
+
+    // Already in the process of connecting (race between poll + realtime)
+    if (isConnectingRef.current) {
+      console.log('[InAppCall] Already connecting, skipping');
+      return;
+    }
+
+    isConnectingRef.current = true;
+
     try {
       setCallStatus('connecting');
-      
-      // Configure audio
       await configureAudioMode();
-      
-      // Create connection if not provided
-      if (!connectionRef.current) {
-        connectionRef.current = new InAppCallConnection(
-          session.room_name,
-          user?.id,
-          user?.full_name || 'User'
-        );
-        
-        // Set up callbacks
-        connectionRef.current.onStatusChange = (status) => {
-          setCallStatus(status);
-        };
-        
-        connectionRef.current.onParticipantLeft = () => {
-          handleRemoteLeft();
-        };
-        
-        connectionRef.current.onError = (error) => {
-          Alert.alert('Call Error', 'Connection failed');
-        };
-        
-        // Connect
-        await connectionRef.current.connect();
-        await connectionRef.current.startStreaming();
-      }
-      
+
+      connectionRef.current = new InAppCallConnection(
+        session.room_name,
+        user?.id,
+        user?.full_name || 'User'
+      );
+
+      // Apply callbacks BEFORE connecting
+      applyConnectionCallbacks(connectionRef.current);
+
+      await connectionRef.current.connect();
+      await connectionRef.current.startStreaming();
+
       setCallStatus('connected');
       setLoading(false);
     } catch (error) {
@@ -137,12 +209,13 @@ export default function InAppCallScreen({ route, navigation }) {
       Alert.alert('Error', 'Failed to connect to call');
       setCallStatus('error');
       setLoading(false);
+    } finally {
+      isConnectingRef.current = false;
     }
   };
 
   const handleToggleMute = async () => {
     if (!connectionRef.current) return;
-    
     try {
       await connectionRef.current.setMuted(!isMuted);
       setIsMuted(!isMuted);
@@ -153,18 +226,18 @@ export default function InAppCallScreen({ route, navigation }) {
 
   const handleEndCall = async () => {
     try {
-      // End connection
       if (connectionRef.current) {
         await connectionRef.current.end();
       }
-      
-      // Update status in database
-      await endCall(callSessionId);
-      
-      cleanup();
-      navigation.goBack();
+      await endCall(callSessionId, user?.id);
     } catch (error) {
-      console.error('Failed to end call:', error);
+      // Ignore "already ended" — the other side ended it first, that's fine
+      if (!error?.message?.includes('ended to ended')) {
+        console.error('Failed to end call:', error);
+      }
+    } finally {
+      // Always clean up and navigate regardless of API result
+      cleanup();
       navigation.goBack();
     }
   };
@@ -189,10 +262,12 @@ export default function InAppCallScreen({ route, navigation }) {
 
   const handleRemoteLeft = () => {
     Alert.alert('Participant Left', 'The other participant left the call');
-    handleEndCall();
+    cleanup();        // just clean up locally
+    navigation.goBack(); // and leave, no API call needed
   };
 
   const cleanup = () => {
+    stopWaitingPoll(); // ← NEW: stop poll on cleanup
     if (subscriptionRef.current) {
       subscriptionRef.current.unsubscribe();
     }
@@ -203,8 +278,6 @@ export default function InAppCallScreen({ route, navigation }) {
       connectionRef.current.end();
     }
   };
-
-  // Duration is now formatted using formatDuration utility
 
   const getStatusText = () => {
     switch (callStatus) {
@@ -289,7 +362,6 @@ export default function InAppCallScreen({ route, navigation }) {
 
         {/* Controls */}
         <View style={styles.controlsContainer}>
-          {/* Mute Button */}
           <TouchableOpacity
             style={[styles.controlButton, isMuted && styles.controlButtonActive]}
             onPress={handleToggleMute}
@@ -299,7 +371,6 @@ export default function InAppCallScreen({ route, navigation }) {
             <Text style={styles.controlLabel}>{isMuted ? 'Unmute' : 'Mute'}</Text>
           </TouchableOpacity>
 
-          {/* End Call Button */}
           <TouchableOpacity
             style={styles.endCallButton}
             onPress={handleEndCall}
@@ -308,7 +379,6 @@ export default function InAppCallScreen({ route, navigation }) {
             <Text style={styles.endCallLabel}>End Call</Text>
           </TouchableOpacity>
 
-          {/* Video placeholder */}
           <TouchableOpacity
             style={[styles.controlButton, styles.disabledButton]}
             disabled={true}
@@ -322,7 +392,7 @@ export default function InAppCallScreen({ route, navigation }) {
         {callSession && (
           <View style={styles.incidentCard}>
             <Text style={styles.incidentLabel}>INCIDENT</Text>
-            <Text style={styles.incidentId}>#{callSession.incident_id?.slice(0, 8).toUpperCase()}</Text>
+            <Text style={styles.incidentId}>#{callSession.incident_id?.slice(0, 8)?.toUpperCase()}</Text>
           </View>
         )}
       </View>

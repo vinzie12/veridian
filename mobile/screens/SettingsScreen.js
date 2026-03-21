@@ -59,7 +59,7 @@ export default function SettingsScreen({ navigation }) {
             <View style={styles.divider} />
             <View style={styles.row}>
               <Text style={styles.label}>Role</Text>
-              <Text style={styles.value}>{user.role.toUpperCase()}</Text>
+              <Text style={styles.value}>{(user?.role || 'unknown').toUpperCase()}</Text>
             </View>
             {!isCitizen && user.agency && (
               <>
